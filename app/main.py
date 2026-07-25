@@ -1,7 +1,9 @@
+import hashlib
 import logging
+import re
 
 from fastapi import FastAPI
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from .config import WEB_DIR
@@ -26,13 +28,46 @@ def healthz():
     return {"ok": True}
 
 
+def _asset_version() -> str:
+    """A short hash of the front-end files, recomputed at boot.
+
+    Without this, a browser holding a cached /static/app.js can pair it with
+    freshly deployed HTML — the deploy succeeds and the user still sees the old
+    app, which is indistinguishable from "the deploy didn't work".
+    """
+    digest = hashlib.sha256()
+    for path in sorted(WEB_DIR.glob("*")):
+        if path.is_file():
+            stat = path.stat()
+            digest.update(f"{path.name}:{stat.st_size}:{stat.st_mtime_ns}".encode())
+    return digest.hexdigest()[:10]
+
+
+ASSET_VERSION = _asset_version()
+_ASSET_REF = re.compile(r'(?P<attr>href|src)="/static/(?P<file>[\w.\-]+)"')
+
+
+def _render_index() -> HTMLResponse:
+    html = (WEB_DIR / "index.html").read_text(encoding="utf-8")
+    html = _ASSET_REF.sub(
+        lambda m: f'{m.group("attr")}="/static/{m.group("file")}?v={ASSET_VERSION}"',
+        html,
+    )
+    # The HTML itself must never be cached, or it would keep pointing at the
+    # previous build's asset versions and defeat the whole mechanism.
+    return HTMLResponse(
+        html,
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+    )
+
+
 @app.get("/", include_in_schema=False)
 def index():
-    return FileResponse(WEB_DIR / "index.html")
+    return _render_index()
 
 
 @app.get("/s/{token}", include_in_schema=False)
 def shared_lesson_page(token: str):
     """Shared-lesson links are real URLs people paste to each other, so they
     have to survive a cold load. The SPA reads the token off the path."""
-    return FileResponse(WEB_DIR / "index.html")
+    return _render_index()
