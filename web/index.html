@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Tangent — learn the ring around your job</title>
+  <link rel="icon" href="/static/owl.svg">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <div class="shell">
+    <header class="top">
+      <img class="owl" src="/static/owl.svg" alt="">
+      <span class="wordmark">Tangent</span>
+      <span class="spacer"></span>
+      <span class="stat flame hidden" id="streakStat">🔥 <span id="streakNum">0</span></span>
+      <span class="stat hidden" id="xpStat">⭐ <span id="xpNum">0</span></span>
+    </header>
+
+    <main id="view"></main>
+  </div>
+
+  <nav class="tabs hidden" id="tabs">
+    <button data-tab="today">Today</button>
+    <button data-tab="progress">Progress</button>
+    <button data-tab="profile">Profile</button>
+  </nav>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

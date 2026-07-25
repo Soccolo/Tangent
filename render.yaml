@@ -1,0 +1,41 @@
+# Render Blueprint. In Render: New → Blueprint → point at this repo.
+# Everything here is created for you except ANTHROPIC_KEY, which you paste in.
+services:
+  - type: web
+    name: tangent
+    runtime: python
+    plan: starter          # "free" also works; it sleeps after ~15 min idle
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /healthz
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.7"
+      - key: TANGENT_ENV
+        value: production
+      - key: ANTHROPIC_API_KEY
+        sync: false          # you paste this into the dashboard; never commit it
+      - key: TANGENT_SECRET
+        generateValue: true  # Render generates and stores a random value
+      - key: TANGENT_MODEL
+        value: claude-opus-5
+      - key: TANGENT_EFFORT
+        value: medium
+      # Spend guards. Signup is open, so these are what stand between a public
+      # URL and a surprising Anthropic bill. Tune once you see real usage.
+      - key: TANGENT_DAILY_LESSON_CAP
+        value: "6"
+      - key: TANGENT_DAILY_DIGEST_CAP
+        value: "4"
+      - key: TANGENT_GLOBAL_DAILY_CAP
+        value: "300"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: tangent-db
+          property: connectionString
+
+databases:
+  - name: tangent-db
+    plan: basic-256mb       # check current plan names/pricing in the dashboard
+    databaseName: tangent
+    user: tangent
