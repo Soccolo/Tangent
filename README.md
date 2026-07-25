@@ -77,32 +77,52 @@ to `medium`, which is already strong on Opus 5.
   to a fallback model in the same call). If your SDK or account doesn't have the beta,
   the app logs a warning once and continues without it.
 
-## Deploying to Render
+## Deploying for free (Render + Neon)
 
-`render.yaml` is a Blueprint: it declares the web service, a Postgres database, and
-every environment variable except the API key.
+Render's free web service is fine. Its *free database* is the problem: it expires, and
+free instances have no persistent disk, so SQLite gets wiped on every deploy. Putting
+Postgres somewhere else fixes that at no cost.
 
-1. **Push to GitHub** (Render deploys from a repo):
+1. **Create a free Postgres** at [neon.tech](https://neon.tech) (or Supabase). Copy the
+   connection string. No code change needed — `config.py` reads `DATABASE_URL` and
+   normalises the scheme for SQLAlchemy.
 
-   ```bash
-   git init && git add -A && git commit -m "Tangent v1"
-   ```
+2. **In Render:** New → Blueprint → pick this repo. It reads `render.yaml`.
 
-   ```bash
-   gh repo create tangent --private --source=. --push
-   ```
+3. **Paste two values** when prompted — `ANTHROPIC_API_KEY` and the `DATABASE_URL`
+   from step 1. Both are marked `sync: false`, so neither lives in the repo.
+   `TANGENT_SECRET` is generated for you; don't set it by hand, and don't change it
+   later or you'll sign everyone out.
 
-2. **In Render:** New → Blueprint → pick the repo. It reads `render.yaml`.
-
-3. **Paste your `ANTHROPIC_API_KEY`** when prompted (it's the one var marked
-   `sync: false`, so it never lives in the repo). `TANGENT_SECRET` is generated for
-   you — don't set it by hand, and don't change it later or you'll sign everyone out.
-
-4. **Set a spend limit in the Anthropic Console** before you share the URL. The caps
-   below are the application's guard; the Console limit is the one that can't be
-   defeated by a bug in mine.
+4. **Set a spend limit in the Anthropic Console** before sharing the URL. The caps
+   below are application logic; the Console limit is the one a bug in the app can't
+   defeat.
 
 Deploys are automatic on push. `/healthz` is the health check.
+
+**The free trade-off:** the service sleeps after ~15 minutes idle, so the first request
+after a quiet spell takes 30–60s to wake — *before* the 30–60s of lesson generation.
+Your own use won't notice much; strangers might think it's broken. The paid always-on
+plan is the only real fix (see the commented block in `render.yaml`).
+
+Ongoing generation isn't affected by sleep: the client polls every 2.5s while a lesson
+is being written, which keeps the service awake for the duration.
+
+### Why Render, and when not to
+
+Render is the least fiddly path from a GitHub repo to an HTTPS URL — that's the whole
+recommendation, not a claim it's technically better. Reasonable alternatives:
+
+| Option | Free? | Worth it when |
+| --- | --- | --- |
+| **Render + Neon** | Yes | You want a link today and can live with cold starts |
+| **Fly.io** | Small usage is very cheap | You want no sleep, real volumes, `fly deploy` from your machine, no GitHub round-trip |
+| **Hugging Face Spaces** | Yes | Handing to testers matters more than durability — storage is ephemeral unless you pay |
+| **Oracle Cloud free tier** | Yes, genuinely, forever | You don't mind being the sysadmin: a VM, nginx, systemd, TLS certs |
+| **Vercel / Netlify** | — | **Don't.** Serverless kills the process after the response, which breaks background lesson generation outright |
+
+Anything that runs a long-lived Python process works. The app is one service with no
+build step, so porting it is a start command and two env vars.
 
 ### What the spend guards actually allow
 

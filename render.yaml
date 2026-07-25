@@ -1,10 +1,21 @@
 # Render Blueprint. In Render: New → Blueprint → point at this repo.
-# Everything here is created for you except ANTHROPIC_KEY, which you paste in.
+#
+# This is configured for the FREE path: a free web service plus an external
+# free Postgres (Neon or Supabase). Render's own free Postgres expires, and
+# free instances have no persistent disk — so SQLite there gets wiped on every
+# deploy. Keeping the database off-platform is what makes $0 actually work.
+#
+# Before deploying, create a free Postgres at neon.tech (or supabase.com) and
+# have its connection string ready — Render will prompt you for DATABASE_URL
+# and ANTHROPIC_API_KEY, the two vars marked `sync: false`.
+#
+# Plan names and free-tier terms change; verify against the dashboard rather
+# than trusting these comments.
 services:
   - type: web
     name: tangent
     runtime: python
-    plan: starter          # "free" also works; it sleeps after ~15 min idle
+    plan: free             # sleeps after ~15 min idle; see README for the trade-off
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /healthz
@@ -14,7 +25,9 @@ services:
       - key: TANGENT_ENV
         value: production
       - key: ANTHROPIC_API_KEY
-        sync: false          # you paste this into the dashboard; never commit it
+        sync: false          # paste into the dashboard; never commit it
+      - key: DATABASE_URL
+        sync: false          # paste your Neon/Supabase connection string
       - key: TANGENT_SECRET
         generateValue: true  # Render generates and stores a random value
       - key: TANGENT_MODEL
@@ -29,13 +42,18 @@ services:
         value: "4"
       - key: TANGENT_GLOBAL_DAILY_CAP
         value: "300"
-      - key: DATABASE_URL
-        fromDatabase:
-          name: tangent-db
-          property: connectionString
 
-databases:
-  - name: tangent-db
-    plan: basic-256mb       # check current plan names/pricing in the dashboard
-    databaseName: tangent
-    user: tangent
+# --- Paid alternative -------------------------------------------------------
+# To use Render's own Postgres and an always-on service instead, set the web
+# plan to `starter`, drop the DATABASE_URL entry above, and swap in:
+#
+#      - key: DATABASE_URL
+#        fromDatabase:
+#          name: tangent-db
+#          property: connectionString
+#
+# databases:
+#   - name: tangent-db
+#     plan: basic-256mb
+#     databaseName: tangent
+#     user: tangent
