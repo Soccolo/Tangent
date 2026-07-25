@@ -44,6 +44,38 @@ spending anything. The account's password is `demodemo` if it didn't already exi
 Tangent's own pick is left ungenerated on purpose: opening it is what exercises the
 real Claude path once a key is in place.
 
+## Sharing
+
+Any finished lesson can be shared from the finish screen or the Progress list. That
+mints an unguessable token at `/s/<token>`:
+
+- **Anyone with the link can read it, signed in or not** — that's what makes it
+  shareable, and it's worth knowing before you paste one into a public channel. Sharing
+  is opt-in per lesson and revocable (`DELETE /api/lessons/{id}/share`).
+- A signed-in recipient can **add it to their own Tangent**, which copies the lesson so
+  they can answer the questions and earn XP. The copy credits the original author.
+- **Adding a shared lesson costs nothing** — no generation, so no quota is claimed. The
+  second reader of a lesson is free, which makes sharing the cheapest way to grow use.
+
+## Profile
+
+Display name, bio, "what do you do", an accent colour, and a photo. Avatars are
+centre-cropped and resized to 256px **in the browser** and stored as a data URL on the
+user row — the free hosting tier has no persistent disk, so a file written to disk
+would vanish on the next deploy. Server-side validation accepts PNG/JPEG/WebP only:
+SVG is rejected because an SVG avatar is markup the page would then render.
+
+## Schema changes
+
+`ensure_schema()` runs at startup and adds columns that exist on the models but not yet
+in the database. `create_all()` alone will not do this — it creates missing tables and
+ignores existing ones, so a new column means every query selecting it fails against a
+live database.
+
+It only ever **adds**. Renames, type changes, and drops still need doing by hand, and a
+NOT NULL column with no server default is skipped with a warning rather than failing
+the boot. Move to Alembic before the data is worth real care.
+
 ## How it works
 
 | Piece | What it does |

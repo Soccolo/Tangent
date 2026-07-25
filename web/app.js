@@ -8,6 +8,8 @@ const state = {
   tab: "today",
   digest: null,
   activities: [],
+  saved: [],         // shared lessons added from someone else's link
+  shared: null,      // { token, ... } when viewing /s/<token>
   lesson: null,      // { id, content, pickedBy }
   step: 0,           // index into cards + questions
   answers: [],       // chosen option index per question; also marks it answered
@@ -59,19 +61,65 @@ function busy(button, on, label) {
   }
 }
 
+const initials = (name, email) =>
+  (String(name || email || "?").trim()[0] || "?").toUpperCase();
+
+// Avatars are data: URLs we validated server-side (raster only, never SVG).
+const avatarStyle = (url) => (url ? `background-image:url("${url}")` : "");
+
+function applyAccent(accent) {
+  const root = document.documentElement;
+  if (accent) root.setAttribute("data-accent", accent);
+  else root.removeAttribute("data-accent");
+}
+
 function paintStats() {
   const streak = document.getElementById("streakStat");
   const xp = document.getElementById("xpStat");
-  if (!state.user) {
-    streak.classList.add("hidden");
-    xp.classList.add("hidden");
-    return;
+  const avatarBtn = document.getElementById("avatarBtn");
+  const logoutBtn = document.getElementById("logoutBtn");
+  const signedIn = !!state.user;
+
+  for (const el of [streak, xp, avatarBtn, logoutBtn]) {
+    el.classList.toggle("hidden", !signedIn);
   }
-  streak.classList.remove("hidden");
-  xp.classList.remove("hidden");
+  applyAccent(signedIn ? state.user.accent : "");
+  if (!signedIn) return;
+
   document.getElementById("streakNum").textContent = state.user.current_streak;
   document.getElementById("xpNum").textContent = state.user.xp;
+  avatarBtn.style.cssText = avatarStyle(state.user.avatar);
+  avatarBtn.textContent = state.user.avatar
+    ? ""
+    : initials(state.user.display_name, state.user.email);
 }
+
+async function signOut() {
+  try { await api("/api/auth/signout", { method: "POST" }); } catch { /* leaving anyway */ }
+  state.user = null;
+  state.digest = null;
+  state.lesson = null;
+  state.shared = null;
+  if (location.pathname !== "/") history.replaceState({}, "", "/");
+  render();
+}
+
+/* The wordmark is the way home — from mid-lesson too, which is why it exits
+   the lesson rather than just switching tab. */
+document.getElementById("homeBtn").onclick = () => {
+  if (!state.user) return render();
+  state.lesson = null;
+  state.shared = null;
+  if (location.pathname !== "/") history.replaceState({}, "", "/");
+  loadToday().then(() => setTab("today")).catch(() => setTab("today"));
+};
+
+document.getElementById("logoutBtn").onclick = signOut;
+document.getElementById("avatarBtn").onclick = () => {
+  state.lesson = null;
+  state.shared = null;
+  setTab("profile");
+};
 
 function setTab(tab) {
   state.tab = tab;
@@ -89,6 +137,7 @@ tabs.addEventListener("click", (e) => {
 
 function render() {
   paintStats();
+  if (state.shared) return renderShared();
   if (!state.user) return renderAuth();
   tabs.classList.remove("hidden");
   if (state.lesson) return renderLesson();
@@ -170,14 +219,16 @@ function renderAuth() {
 /* --- today --- */
 
 async function loadToday() {
-  const [user, activities, digest] = await Promise.all([
+  const [user, activities, digest, saved] = await Promise.all([
     api("/api/auth/me"),   // refreshes the remaining-quota counter too
     api("/api/activities"),
     api("/api/digest/today"),
+    api("/api/saved-lessons"),
   ]);
   state.user = user;
   state.activities = activities;
   state.digest = digest.exists ? digest : null;
+  state.saved = saved;
 }
 
 function categoryLabel(c) {
@@ -207,7 +258,31 @@ function renderToday() {
               </div>`).join("")
           : `<p class="muted small">Nothing logged today yet.</p>`}
       </div>
+
+      <button class="wip" id="recordBtn" aria-disabled="true">
+        <span class="dot"></span>
+        <span class="label">
+          <b>Record while you work</b>
+          <span>Capture your screen and let Tangent log the day for you</span>
+        </span>
+        <span class="badge-wip">Coming soon</span>
+      </button>
     </div>
+
+    ${state.saved.length ? `
+      <div class="card">
+        <h2>Shared with you</h2>
+        <div class="stack" style="margin-top:12px">
+          ${state.saved.map((l) => `
+            <div class="topic" style="cursor:default">
+              <span class="tag cat">${l.author ? `From ${esc(l.author)}` : "Shared"}</span>
+              ${l.completed ? `<span class="tag">Done ${l.score}/${l.total_questions}</span>` : ""}
+              <h3 style="margin-top:10px">${esc(l.title)}</h3>
+              <button class="btn small" data-lesson="${l.id}" style="margin-top:10px">
+                ${l.completed ? "Review" : "Start lesson"}</button>
+            </div>`).join("")}
+        </div>
+      </div>` : ""}
 
     ${digest ? renderDigest(digest) : `
       <div class="card center">
@@ -245,6 +320,9 @@ function renderToday() {
       } catch (err) { toast(err.message); }
     };
   });
+
+  document.getElementById("recordBtn").onclick = () =>
+    toast("Screen recording isn't built yet — it's where automatic logging is headed.");
 
   const build = document.getElementById("buildDigest");
   if (build) build.onclick = () => buildDigest(build, false);
@@ -333,6 +411,11 @@ const WRITING_LINES = [
   "Writing the questions…",
   "Checking the explanations hold up…",
 ];
+
+function lessonSourceLabel(lesson) {
+  if (lesson.picked_by === "shared") return `From ${lesson.author || "someone"}`;
+  return lesson.picked_by === "user" ? "Your pick" : "Tangent's pick";
+}
 
 function startLesson(lesson) {
   state.lesson = lesson;
@@ -454,7 +537,7 @@ function renderLesson() {
 function renderCard(card, header) {
   const stage = document.getElementById("stage");
   stage.innerHTML = `
-    ${header ? `<div class="tag cat">${state.lesson.picked_by === "user" ? "Your pick" : "Tangent's pick"}</div>
+    ${header ? `<div class="tag cat">${esc(lessonSourceLabel(state.lesson))}</div>
       <h1 style="margin-top:10px">${esc(header.title)}</h1>
       <p class="muted">${esc(header.subtitle)} · ${Number(header.estimated_minutes) || 10} min</p>
       <hr style="border:0;border-top:1px solid var(--border);margin:18px 0">` : ""}
@@ -545,8 +628,130 @@ async function renderFinish() {
       <div class="levelbar"><i style="width:${result.xp_into_level}%"></i></div>
       <p class="tiny muted" style="margin-top:6px">${100 - result.xp_into_level} XP to level ${result.level + 1}</p>
       <button class="btn wide" id="done" style="margin-top:18px">Back to today</button>
+      <button class="btn ghost wide" id="shareBtn" style="margin-top:10px">Share this lesson</button>
+      <div id="shareSlot"></div>
     </div>`;
   document.getElementById("done").onclick = exitLesson;
+  document.getElementById("shareBtn").onclick = (e) =>
+    shareLesson(state.lesson.id, e.currentTarget, document.getElementById("shareSlot"));
+}
+
+/* --- sharing --- */
+
+async function shareLesson(lessonId, button, slot) {
+  busy(button, true, "Creating link…");
+  try {
+    const { path } = await api(`/api/lessons/${lessonId}/share`, { method: "POST" });
+    const url = location.origin + path;
+    busy(button, false);
+    if (button) button.classList.add("hidden");
+    slot.innerHTML = `
+      <div class="sharebox">
+        <input type="text" id="shareUrl" readonly value="${esc(url)}">
+        <button class="btn small" id="copyShare">Copy</button>
+      </div>
+      <p class="tiny muted" style="margin-top:8px">Anyone with this link can read the
+        lesson — no account needed. They can add it to their own Tangent to answer
+        the questions and earn XP.</p>`;
+    document.getElementById("copyShare").onclick = async () => {
+      const input = document.getElementById("shareUrl");
+      try {
+        await navigator.clipboard.writeText(url);
+        toast("Link copied");
+      } catch {
+        input.select();  // clipboard blocked (insecure context / permissions)
+        toast("Press Ctrl+C to copy");
+      }
+    };
+  } catch (err) {
+    busy(button, false);
+    toast(err.message);
+  }
+}
+
+/* A shared link must work for someone with no account, so this view renders
+   before any auth check. */
+async function renderShared() {
+  tabs.classList.add("hidden");
+  const token = state.shared.token;
+
+  if (!state.shared.content) {
+    view.innerHTML = `<div class="card center"><span class="spinner"></span></div>`;
+    try {
+      state.shared = { ...state.shared, ...(await api(`/api/shared/${token}`)) };
+    } catch (err) {
+      view.innerHTML = `
+        <div class="card center" style="margin-top:40px">
+          <img src="/static/owl.svg" alt="" width="72" height="72">
+          <h2>Link not found</h2>
+          <p class="muted">${esc(err.message)}</p>
+          <button class="btn" id="goHome">Go to Tangent</button>
+        </div>`;
+      document.getElementById("goHome").onclick = leaveShared;
+      return;
+    }
+  }
+
+  const s = state.shared;
+  const cards = s.content.cards || [];
+  const questions = s.content.questions || [];
+
+  view.innerHTML = `
+    <div class="card">
+      <div class="byline">
+        <span class="who" style="${avatarStyle(s.author_avatar)}">${
+          s.author_avatar ? "" : esc(initials(s.author))}</span>
+        <span><b>${esc(s.author)}</b> shared this lesson with you</span>
+      </div>
+      <h1>${esc(s.content.title || s.title)}</h1>
+      <p class="muted">${esc(s.content.subtitle || s.blurb)}</p>
+      <p class="tiny muted" style="margin-top:10px">${cards.length} cards ·
+        ${questions.length} questions · ${Number(s.content.estimated_minutes) || 10} min</p>
+      ${state.user ? `
+        <button class="btn wide" id="addShared" style="margin-top:16px">
+          Add to my lessons</button>
+        <p class="tiny muted center" style="margin-top:8px">Free — no generation needed,
+          and it counts towards your streak.</p>`
+      : `
+        <button class="btn wide" id="readShared" style="margin-top:16px">Read it</button>
+        <button class="btn ghost wide" id="joinShared" style="margin-top:10px">
+          Create an account to answer the questions</button>`}
+    </div>
+
+    ${!state.user ? cards.map((card) => `
+      <div class="card">
+        <h2>${esc(card.heading)}</h2>
+        <p>${prose(card.body)}</p>
+        ${card.diagram_svg ? `<figure class="diagram">${card.diagram_svg}
+          ${card.diagram_caption ? `<figcaption>${esc(card.diagram_caption)}</figcaption>` : ""}
+        </figure>` : ""}
+        ${card.intuition ? `<div class="intuition"><b>The intuition</b>${prose(card.intuition)}</div>` : ""}
+      </div>`).join("") : ""}`;
+
+  const add = document.getElementById("addShared");
+  if (add) add.onclick = async () => {
+    busy(add, true, "Adding…");
+    try {
+      const { id } = await api(`/api/shared/${token}/add`, { method: "POST" });
+      state.shared = null;
+      history.replaceState({}, "", "/");
+      await loadToday();
+      openLesson(id, null);
+    } catch (err) { busy(add, false); toast(err.message); }
+  };
+
+  const read = document.getElementById("readShared");
+  if (read) read.onclick = () =>
+    view.querySelectorAll(".card")[1]?.scrollIntoView({ behavior: "smooth", block: "start" });
+
+  const join = document.getElementById("joinShared");
+  if (join) join.onclick = leaveShared;
+}
+
+function leaveShared() {
+  state.shared = null;
+  history.replaceState({}, "", "/");
+  render();
 }
 
 /* --- progress --- */
@@ -591,73 +796,188 @@ async function renderProgress() {
         <div class="logrow">
           <div style="flex:1">
             <div>${esc(h.title)}</div>
-            <div class="tiny muted">${h.picked_by === "app" ? "Tangent's pick" : "Your pick"}
+            <div class="tiny muted">${
+              h.picked_by === "shared"
+                ? `From ${esc(h.author || "someone")}`
+                : h.picked_by === "app" ? "Tangent's pick" : "Your pick"}
               · ${h.score}/${h.total} · +${h.xp} XP</div>
           </div>
+          <button class="btn small subtle" data-share="${h.id}" title="Share this lesson">
+            ${h.share_token ? "Link" : "Share"}</button>
           <button class="btn small subtle" data-open="${h.id}">Review</button>
         </div>`).join("") : `<p class="muted small">Nothing finished yet.</p>`}
+      <div id="shareSlot"></div>
     </div>`;
 
   view.querySelectorAll("[data-open]").forEach((b) => {
     b.onclick = () => openLesson(Number(b.dataset.open), b);
   });
+
+  view.querySelectorAll("[data-share]").forEach((b) => {
+    b.onclick = () => shareLesson(Number(b.dataset.share), b, document.getElementById("shareSlot"));
+  });
 }
 
 /* --- profile --- */
 
+const ACCENTS = ["violet", "ember", "teal", "rose", "lime"];
+
+/* Resize client-side before upload: a phone photo is several megabytes, and
+   the avatar renders at 68px. Keeps the row small enough to live in Postgres. */
+function resizeToDataUrl(file, size = 256) {
+  return new Promise((resolve, reject) => {
+    if (!/^image\/(png|jpe?g|webp)$/i.test(file.type)) {
+      reject(new Error("Pick a PNG, JPEG or WebP image."));
+      return;
+    }
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("Couldn't read that file."));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error("That file isn't a readable image."));
+      img.onload = () => {
+        const side = Math.min(img.width, img.height);      // centre-crop to square
+        const canvas = document.createElement("canvas");
+        canvas.width = canvas.height = size;
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, (img.width - side) / 2, (img.height - side) / 2,
+                      side, side, 0, 0, size, size);
+        resolve(canvas.toDataURL("image/jpeg", 0.85));
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
 function renderProfile() {
   const u = state.user;
+  let pendingAvatar;  // undefined = unchanged, null = remove, string = new image
+
   view.innerHTML = `
     <div class="card">
       <h2>Your profile</h2>
       <p class="muted small">${esc(u.email)}</p>
-      <form id="profileForm" class="stack" style="margin-top:14px">
+
+      <div class="avatar-edit" style="margin-top:16px">
+        <div class="avatar-preview" id="avatarPreview" style="${avatarStyle(u.avatar)}">${
+          u.avatar ? "" : esc(initials(u.display_name, u.email))}</div>
+        <div class="stack" style="flex:1">
+          <div class="row wrap">
+            <button class="btn small subtle" id="pickAvatar" type="button">Upload photo</button>
+            <button class="btn small ghost ${u.avatar ? "" : "hidden"}" id="removeAvatar" type="button">Remove</button>
+          </div>
+          <p class="tiny muted">Square works best. Resized to 256px in your browser
+            before it's sent.</p>
+        </div>
+        <input type="file" id="avatarFile" accept="image/png,image/jpeg,image/webp" class="hidden">
+      </div>
+
+      <form id="profileForm" class="stack">
         <div class="field"><label for="name">Display name</label>
           <input id="name" type="text" value="${esc(u.display_name)}"></div>
+
+        <div class="field"><label for="bioEdit">Short bio</label>
+          <input id="bioEdit" type="text" maxlength="280" value="${esc(u.bio || "")}"
+            placeholder="One line about you — shown when you share a lesson">
+        </div>
+
         <div class="field"><label for="roleEdit">What do you do?</label>
           <textarea id="roleEdit" rows="4">${esc(u.role)}</textarea>
           <div class="tiny muted" style="margin-top:6px">The more specific this is, the
             sharper the suggestions. Name your sector, your tools, your typical week.</div></div>
+
+        <div class="field"><label>Accent colour</label>
+          <div class="swatches" id="swatches">
+            ${ACCENTS.map((a) => `
+              <button type="button" class="swatch ${a}" data-accent="${a}"
+                aria-pressed="${(u.accent || "violet") === a}" title="${a}"></button>`).join("")}
+          </div>
+        </div>
+
         <button class="btn" type="submit" id="saveProfile">Save</button>
       </form>
     </div>
+
     <div class="card">
-      <button class="btn ghost" id="signout">Sign out</button>
+      <button class="btn ghost wide" id="signout">Log out</button>
     </div>`;
+
+  const preview = document.getElementById("avatarPreview");
+  const fileInput = document.getElementById("avatarFile");
+  const removeBtn = document.getElementById("removeAvatar");
+
+  document.getElementById("pickAvatar").onclick = () => fileInput.click();
+  fileInput.onchange = async () => {
+    const file = fileInput.files && fileInput.files[0];
+    if (!file) return;
+    try {
+      pendingAvatar = await resizeToDataUrl(file);
+      preview.style.cssText = avatarStyle(pendingAvatar);
+      preview.textContent = "";
+      removeBtn.classList.remove("hidden");
+    } catch (err) { toast(err.message); }
+    fileInput.value = "";  // let the same file be picked again after a failure
+  };
+
+  removeBtn.onclick = () => {
+    pendingAvatar = null;
+    preview.style.cssText = "";
+    preview.textContent = initials(
+      document.getElementById("name").value || u.display_name, u.email);
+    removeBtn.classList.add("hidden");
+  };
+
+  let accent = u.accent || "violet";
+  document.getElementById("swatches").onclick = (e) => {
+    const button = e.target.closest("[data-accent]");
+    if (!button) return;
+    accent = button.dataset.accent;
+    view.querySelectorAll("[data-accent]").forEach((s) =>
+      s.setAttribute("aria-pressed", String(s.dataset.accent === accent)));
+    applyAccent(accent === "violet" ? "" : accent);  // live preview
+  };
 
   document.getElementById("profileForm").onsubmit = async (e) => {
     e.preventDefault();
     const button = document.getElementById("saveProfile");
     busy(button, true, "Saving…");
     try {
-      state.user = await api("/api/auth/me", {
-        method: "PATCH",
-        body: {
-          display_name: document.getElementById("name").value,
-          role: document.getElementById("roleEdit").value,
-        },
-      });
+      const body = {
+        display_name: document.getElementById("name").value,
+        role: document.getElementById("roleEdit").value,
+        bio: document.getElementById("bioEdit").value,
+        accent: accent === "violet" ? "" : accent,
+      };
+      if (pendingAvatar !== undefined) body.avatar = pendingAvatar;
+      state.user = await api("/api/auth/me", { method: "PATCH", body });
+      pendingAvatar = undefined;
+      paintStats();
       busy(button, false);
       toast("Saved");
     } catch (err) { busy(button, false); toast(err.message); }
   };
 
-  document.getElementById("signout").onclick = async () => {
-    await api("/api/auth/signout", { method: "POST" });
-    state.user = null;
-    state.digest = null;
-    render();
-  };
+  document.getElementById("signout").onclick = signOut;
 }
 
 /* ------------------------------------------------------------------ boot */
 
 (async function boot() {
+  // /s/<token> is a real URL people paste around — resolve it before auth, so
+  // a signed-out recipient still sees the lesson rather than a login wall.
+  const sharedMatch = location.pathname.match(/^\/s\/([\w-]+)\/?$/);
+  if (sharedMatch) state.shared = { token: sharedMatch[1] };
+
   try {
     state.user = await api("/api/auth/me");
+    if (!state.shared) {
+      await loadToday();
+      setTab("today");
+      return;
+    }
     await loadToday();
-    setTab("today");
-  } catch {
-    render();
-  }
+  } catch { /* signed out — the shared view still renders */ }
+
+  render();
 })();

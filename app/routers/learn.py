@@ -1,6 +1,7 @@
 import json
 import logging
 import random
+import secrets
 from datetime import date, timedelta
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
@@ -339,6 +340,8 @@ def get_lesson(
             "completed": lesson.completed,
             "score": lesson.score,
             "content": json.loads(lesson.content_json),
+            "share_token": lesson.share_token,
+            "author": lesson.author_name,
         }
 
     if lesson.status == "generating":
@@ -423,6 +426,140 @@ def complete_lesson(
     }
 
 
+# --------------------------------------------------------------------------- #
+# Sharing
+# --------------------------------------------------------------------------- #
+
+
+@router.post("/lessons/{lesson_id}/share")
+def share_lesson(
+    lesson_id: int,
+    user: User = Depends(current_user),
+    db: OrmSession = Depends(get_db),
+):
+    """Mint an unguessable link. Anyone holding it can read the lesson — that's
+    the point — so it's opt-in per lesson and revocable."""
+    lesson = db.get(Lesson, lesson_id)
+    if lesson is None or lesson.user_id != user.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No such lesson")
+    if lesson.status != "ready":
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "Only a finished lesson can be shared."
+        )
+    if not lesson.share_token:
+        lesson.share_token = secrets.token_urlsafe(24)
+        lesson.author_name = lesson.author_name or user.display_name or "someone"
+        db.commit()
+    return {"token": lesson.share_token, "path": f"/s/{lesson.share_token}"}
+
+
+@router.delete("/lessons/{lesson_id}/share", status_code=status.HTTP_204_NO_CONTENT)
+def unshare_lesson(
+    lesson_id: int,
+    user: User = Depends(current_user),
+    db: OrmSession = Depends(get_db),
+):
+    lesson = db.get(Lesson, lesson_id)
+    if lesson is None or lesson.user_id != user.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No such lesson")
+    lesson.share_token = None
+    db.commit()
+
+
+@router.get("/shared/{token}")
+def view_shared(
+    token: str,
+    db: OrmSession = Depends(get_db),
+):
+    """Deliberately unauthenticated: a shared link has to work for someone who
+    doesn't have an account yet, or it isn't shareable."""
+    lesson = db.scalar(select(Lesson).where(Lesson.share_token == token))
+    if lesson is None or lesson.status != "ready":
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "This link isn't valid any more.")
+    author = db.get(User, lesson.user_id)
+    return {
+        "token": token,
+        "title": lesson.topic_title,
+        "blurb": lesson.topic_blurb,
+        "author": lesson.author_name or (author.display_name if author else "someone"),
+        "author_avatar": author.avatar if author else None,
+        "content": json.loads(lesson.content_json),
+    }
+
+
+@router.post("/shared/{token}/add")
+def add_shared(
+    token: str,
+    user: User = Depends(current_user),
+    db: OrmSession = Depends(get_db),
+):
+    """Copy a shared lesson into my account so I can play it and earn XP.
+
+    No quota is claimed: the content already exists, so this costs nothing to
+    Anthropic. That's the nice property of sharing — the second reader is free.
+    """
+    original = db.scalar(select(Lesson).where(Lesson.share_token == token))
+    if original is None or original.status != "ready":
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "This link isn't valid any more.")
+    if original.user_id == user.id:
+        return {"id": original.id, "already_mine": True}
+
+    existing = db.scalar(
+        select(Lesson).where(
+            Lesson.user_id == user.id, Lesson.shared_from_id == original.id
+        )
+    )
+    if existing is not None:
+        return {"id": existing.id, "already_added": True}
+
+    author = db.get(User, original.user_id)
+    copy = Lesson(
+        user_id=user.id,
+        digest_id=None,
+        topic_title=original.topic_title,
+        topic_blurb=original.topic_blurb,
+        picked_by="shared",
+        content_json=original.content_json,
+        status="ready",
+        total_questions=original.total_questions,
+        shared_from_id=original.id,
+        author_name=original.author_name
+        or (author.display_name if author else "someone"),
+    )
+    db.add(copy)
+    db.commit()
+    db.refresh(copy)
+    return {"id": copy.id, "added": True}
+
+
+# Deliberately not "/lessons/saved": that would be shadowed by the
+# "/lessons/{lesson_id}" route declared above it and 422 on the int parse.
+@router.get("/saved-lessons")
+def saved_lessons(user: User = Depends(current_user), db: OrmSession = Depends(get_db)):
+    """Lessons not attached to a day's digest — shared ones people added."""
+    rows = db.scalars(
+        select(Lesson)
+        .where(
+            Lesson.user_id == user.id,
+            Lesson.digest_id.is_(None),
+            Lesson.status == "ready",
+        )
+        .order_by(Lesson.created_at.desc())
+    ).all()
+    return [
+        {
+            "id": lesson.id,
+            "title": lesson.topic_title,
+            "author": lesson.author_name,
+            "picked_by": lesson.picked_by,
+            "completed": lesson.completed,
+            "score": lesson.score,
+            "total_questions": lesson.total_questions,
+        }
+        for lesson in rows
+    ]
+
+
 @router.get("/progress")
 def progress(user: User = Depends(current_user), db: OrmSession = Depends(get_db)):
     lessons = db.scalars(
@@ -444,6 +581,8 @@ def progress(user: User = Depends(current_user), db: OrmSession = Depends(get_db
                 "id": lesson.id,
                 "title": lesson.topic_title,
                 "picked_by": lesson.picked_by,
+                "author": lesson.author_name,
+                "share_token": lesson.share_token,
                 "score": lesson.score,
                 "total": lesson.total_questions,
                 "xp": lesson.xp_awarded,

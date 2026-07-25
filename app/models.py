@@ -29,6 +29,12 @@ class User(Base):
     # Free text: "pricing actuary, financial lines, UK market". Used to steer
     # what counts as "adjacent" rather than "already known".
     role: Mapped[str] = mapped_column(Text, default="")
+    # Avatars are stored as a resized data: URL rather than a file, because the
+    # free hosting tier has no persistent disk — anything written to disk is
+    # gone on the next deploy, while this rides along in Postgres.
+    avatar: Mapped[str | None] = mapped_column(Text, nullable=True)
+    bio: Mapped[str | None] = mapped_column(Text, nullable=True)
+    accent: Mapped[str | None] = mapped_column(String(16), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     xp: Mapped[int] = mapped_column(Integer, default=0)
@@ -113,5 +119,12 @@ class Lesson(Base):
     xp_awarded: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    # Sharing: an unguessable token makes this lesson readable at /s/<token>.
+    # Null means private. Copies keep a pointer back to the original so the
+    # author's name can be credited without duplicating user rows.
+    share_token: Mapped[str | None] = mapped_column(String(48), unique=True, nullable=True)
+    shared_from_id: Mapped[int | None] = mapped_column(ForeignKey("lessons.id"), nullable=True)
+    author_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
 
     user: Mapped[User] = relationship(back_populates="lessons")

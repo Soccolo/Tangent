@@ -16,6 +16,11 @@ class SignIn(BaseModel):
 class ProfileUpdate(BaseModel):
     display_name: str = Field(default="", max_length=120)
     role: str = Field(default="", max_length=2000)
+    bio: str = Field(default="", max_length=280)
+    accent: str = Field(default="", max_length=16)
+    # A resized data: URL, not a file — see models.User.avatar. Generous ceiling
+    # because base64 inflates ~33%; the client resizes to 256px before sending.
+    avatar: str | None = Field(default=None, max_length=400_000)
 
 
 class ActivityIn(BaseModel):

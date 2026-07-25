@@ -1,41 +1,47 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="120" height="120" role="img" aria-label="Tangent owl">
-  <!-- ear tufts -->
-  <path d="M32 56 L28 38 L46 48 Z" fill="#1d4ed8"/>
-  <path d="M88 56 L92 38 L74 48 Z" fill="#1d4ed8"/>
+  
 
-  <!-- body -->
-  <ellipse cx="60" cy="76" rx="35" ry="33" fill="#3b82f6"/>
-  <path d="M25 76a35 33 0 0 0 70 0z" fill="#2563eb" opacity=".35"/>
-  <ellipse cx="60" cy="88" rx="17" ry="19" fill="#bfdbfe" opacity=".55"/>
+  
+  <path d="M32 56 L28 38 L46 48 Z" fill="#5d5294"></path>
+  <path d="M88 56 L92 38 L74 48 Z" fill="#5d5294"></path>
 
-  <!-- feet -->
-  <path d="M48 106q-6 6-11 6M48 106q-2 7-2 9M48 106q5 5 7 8" stroke="#f59e0b" stroke-width="3.5" stroke-linecap="round" fill="none"/>
-  <path d="M72 106q6 6 11 6M72 106q2 7 2 9M72 106q-5 5-7 8" stroke="#f59e0b" stroke-width="3.5" stroke-linecap="round" fill="none"/>
+  
+  <ellipse cx="60" cy="76" rx="35" ry="33" fill="#7c6fc7"></ellipse>
+  <path d="M25 76a35 33 0 0 0 70 0z" fill="#5d5294" opacity=".45"></path>
+  <ellipse cx="60" cy="88" rx="17" ry="19" fill="#d2cefd" opacity=".5"></ellipse>
 
-  <!-- eyes -->
-  <circle cx="46" cy="68" r="13" fill="#ffffff"/>
-  <circle cx="74" cy="68" r="13" fill="#ffffff"/>
-  <circle cx="48" cy="69" r="5.5" fill="#0f172a"/>
-  <circle cx="76" cy="69" r="5.5" fill="#0f172a"/>
-  <circle cx="50" cy="66.5" r="1.8" fill="#ffffff"/>
-  <circle cx="78" cy="66.5" r="1.8" fill="#ffffff"/>
+  
+  <path d="M48 106q-6 6-11 6M48 106q-2 7-2 9M48 106q5 5 7 8" stroke="#e8b657" stroke-width="3.5" stroke-linecap="round" fill="none"></path>
+  <path d="M72 106q6 6 11 6M72 106q2 7 2 9M72 106q-5 5-7 8" stroke="#e8b657" stroke-width="3.5" stroke-linecap="round" fill="none"></path>
 
-  <!-- glasses -->
-  <g fill="none" stroke="#0f172a" stroke-width="3.2">
-    <circle cx="46" cy="68" r="14.5"/>
-    <circle cx="74" cy="68" r="14.5"/>
-    <path d="M60.5 68h-1"/>
-    <path d="M31.5 65 L22 61"/>
-    <path d="M88.5 65 L98 61"/>
+  
+  <circle cx="46" cy="68" r="13" fill="#f3f5fe"></circle>
+  <circle cx="74" cy="68" r="13" fill="#f3f5fe"></circle>
+  <circle cx="48" cy="69" r="5.5" fill="#161826"></circle>
+  <circle cx="76" cy="69" r="5.5" fill="#161826"></circle>
+  <circle cx="50" cy="66.5" r="1.8" fill="#ffffff"></circle>
+  <circle cx="78" cy="66.5" r="1.8" fill="#ffffff"></circle>
+
+  
+  <ellipse class="lid" cx="46" cy="68" rx="13" ry="13" fill="#7c6fc7"></ellipse>
+  <ellipse class="lid" cx="74" cy="68" rx="13" ry="13" fill="#7c6fc7"></ellipse>
+
+  
+  <g fill="none" stroke="#161826" stroke-width="3.2">
+    <circle cx="46" cy="68" r="14.5"></circle>
+    <circle cx="74" cy="68" r="14.5"></circle>
+    <path d="M60.5 68h-1"></path>
+    <path d="M31.5 65 L22 61"></path>
+    <path d="M88.5 65 L98 61"></path>
   </g>
 
-  <!-- beak -->
-  <path d="M60 78 L53 86 L67 86 Z" fill="#f59e0b"/>
+  
+  <path d="M60 78 L53 86 L67 86 Z" fill="#e8b657"></path>
 
-  <!-- mortarboard -->
-  <path d="M44 44h32v6a16 16 0 0 1-32 0z" fill="#0f172a"/>
-  <path d="M60 20 L100 36 L60 52 L20 36 Z" fill="#1e293b"/>
-  <path d="M60 20 L100 36 L60 52 Z" fill="#334155"/>
-  <path d="M96 37.6v14" stroke="#f59e0b" stroke-width="3" stroke-linecap="round"/>
-  <circle cx="96" cy="55" r="4.5" fill="#f59e0b"/>
+  
+  <path d="M44 44h32v6a16 16 0 0 1-32 0z" fill="#292b31"></path>
+  <path d="M60 20 L100 36 L60 52 L20 36 Z" fill="#3f424d"></path>
+  <path d="M60 20 L100 36 L60 52 Z" fill="#595d6c"></path>
+  <path d="M96 37.6v14" stroke="#e8b657" stroke-width="3" stroke-linecap="round"></path>
+  <circle cx="96" cy="55" r="4.5" fill="#e8b657"></circle>
 </svg>

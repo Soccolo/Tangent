@@ -1,4 +1,7 @@
-﻿from fastapi import APIRouter, Depends, HTTPException, Response, status
+﻿import base64
+import binascii
+
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session as OrmSession
 
@@ -15,6 +18,44 @@ from ..security import (
 )
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
+
+# A fixed palette rather than a free hex field: the theme is dark, and an
+# arbitrary colour can land unreadable against it.
+ACCENTS = {"violet", "ember", "teal", "rose", "lime"}
+
+# Only raster images, and only as a self-contained data: URL. An SVG avatar
+# would be markup we then render — a script-injection vector for the price of a
+# profile picture.
+_AVATAR_PREFIXES = (
+    "data:image/png;base64,",
+    "data:image/jpeg;base64,",
+    "data:image/webp;base64,",
+)
+
+
+def _clean_avatar(raw: str) -> str | None:
+    """Validate a client-supplied avatar, or reject it outright."""
+    value = (raw or "").strip()
+    if not value:
+        return None  # explicit removal
+    if not value.startswith(_AVATAR_PREFIXES):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "Avatar must be a PNG, JPEG or WebP image.",
+        )
+    payload = value.split(",", 1)[1] if "," in value else ""
+    try:
+        decoded = base64.b64decode(payload, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Avatar isn't valid image data.") from exc
+    if not decoded:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Avatar image is empty.")
+    if len(decoded) > 300_000:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "That image is too large even after resizing — try a smaller one.",
+        )
+    return value
 
 
 def _start_session(response: Response, db: OrmSession, user: User) -> None:
@@ -43,6 +84,9 @@ def _profile(user: User, db: OrmSession | None = None) -> dict:
         "current_streak": user.current_streak,
         "longest_streak": user.longest_streak,
         "daily_lesson_cap": DAILY_LESSON_CAP,
+        "avatar": user.avatar,
+        "bio": user.bio or "",
+        "accent": user.accent or "",
     }
     if db is not None:
         from .learn import used_today  # local import avoids a circular import
@@ -100,5 +144,11 @@ def update_me(
     if body.display_name.strip():
         user.display_name = body.display_name.strip()
     user.role = body.role.strip()
+    user.bio = body.bio.strip() or None
+    user.accent = body.accent.strip() if body.accent.strip() in ACCENTS else None
+
+    if body.avatar is not None:
+        user.avatar = _clean_avatar(body.avatar)
+
     db.commit()
     return _profile(user, db)
