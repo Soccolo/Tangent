@@ -80,6 +80,11 @@ LESSON = {
                     "when the client noticed, not when they complained, but when "
                     "damage was first suffered. In a missed-deadline case that is "
                     "usually the moment the underlying claim became unarguable.",
+            "intuition": "The clock starts when the harm lands, not when anyone notices "
+                         "it — like rot in a beam. The building is already weaker the "
+                         "day it starts; the survey years later just tells you.",
+            "diagram_caption": "Note the gap: the clock is already running before "
+                               "anyone involved knows there's a problem.",
             "key_terms": [
                 {"term": "Accrual", "definition": "The moment damage is first suffered — the clock's start."},
                 {"term": "Primary period", "definition": "Six years from accrual for tort claims."},
@@ -104,11 +109,36 @@ LESSON = {
                     "attributable to the act or omission — not knowing it was legally "
                     "negligent. This is the provision that keeps files alive years "
                     "after a reserving actuary would have closed them.",
+            "intuition": "Two clocks run in parallel and the claimant gets whichever "
+                         "expires later. Reserving on the six-year clock alone is "
+                         "reading one of two timers and calling it the deadline.",
             "key_terms": [
                 {"term": "Date of knowledge", "definition": "When the claimant knew the damage was attributable to the act."},
                 {"term": "Long-stop", "definition": "s.14B caps everything at 15 years from the negligent act."},
             ],
-            "diagram_svg": "",
+            "diagram_caption": "Whichever bar ends further right is the real deadline — "
+                               "here, the knowledge clock wins by four years.",
+            "diagram_svg": """<svg viewBox="0 0 640 360" xmlns="http://www.w3.org/2000/svg">
+  <text x="20" y="40" font-size="15" fill="currentColor">Two clocks, whichever ends later</text>
+  <line x1="120" y1="300" x2="600" y2="300" stroke="currentColor" stroke-width="1.5"/>
+  <g font-size="13" fill="currentColor">
+    <text x="120" y="325" text-anchor="middle">yr 0</text>
+    <text x="300" y="325" text-anchor="middle">yr 6</text>
+    <text x="480" y="325" text-anchor="middle">yr 12</text>
+    <text x="112" y="105" text-anchor="end">s.2</text>
+    <text x="112" y="175" text-anchor="end">s.14A</text>
+    <text x="112" y="245" text-anchor="end">s.14B</text>
+  </g>
+  <rect x="120" y="85" width="180" height="26" rx="6" fill="currentColor" opacity=".35"/>
+  <text x="310" y="103" font-size="13" fill="currentColor">6 yrs from damage</text>
+  <rect x="330" y="155" width="180" height="26" rx="6" fill="currentColor" opacity=".6"/>
+  <text x="520" y="173" font-size="13" fill="currentColor">3 yrs from knowledge</text>
+  <rect x="120" y="225" width="450" height="26" rx="6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-dasharray="5 4"/>
+  <text x="345" y="243" font-size="13" text-anchor="middle" fill="currentColor">15-yr long-stop — hard backstop</text>
+  <line x1="510" y1="140" x2="510" y2="300" stroke="currentColor" stroke-width="1.5" stroke-dasharray="4 4"/>
+  <text x="510" y="60" font-size="14" text-anchor="middle" fill="currentColor">actual deadline</text>
+  <line x1="510" y1="70" x2="510" y2="150" stroke="currentColor" stroke-width="1.5"/>
+</svg>""",
         },
     ],
     "questions": [

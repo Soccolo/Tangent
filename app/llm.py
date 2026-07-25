@@ -104,14 +104,34 @@ LESSON_SCHEMA = {
             "items": {
                 "type": "object",
                 "additionalProperties": False,
-                "required": ["heading", "body", "key_terms", "diagram_svg"],
+                "required": [
+                    "heading",
+                    "body",
+                    "intuition",
+                    "key_terms",
+                    "diagram_svg",
+                    "diagram_caption",
+                ],
                 "properties": {
                     "heading": {"type": "string"},
                     "body": {
                         "type": "string",
                         "description": (
-                            "80-140 words of plain prose. No markdown headers. "
-                            "Use **bold** for the terms that matter."
+                            "150-260 words of plain prose. Explain the mechanism, not "
+                            "just the label — why it works this way, what happens if "
+                            "it doesn't, what a real instance looks like with real "
+                            "numbers. No markdown headers. **Bold** the terms that "
+                            "matter."
+                        ),
+                    },
+                    "intuition": {
+                        "type": "string",
+                        "description": (
+                            "The plain-language version: an analogy, a limiting case, "
+                            "or the one sentence that makes it click. This is what the "
+                            "reader would repeat to a colleague. Written to stand "
+                            "alone — never 'as explained above'. Empty string only if "
+                            "the card is purely definitional."
                         ),
                     },
                     "key_terms": {
@@ -129,11 +149,19 @@ LESSON_SCHEMA = {
                     "diagram_svg": {
                         "type": "string",
                         "description": (
-                            "Optional inline SVG illustrating the card, or an empty "
-                            "string. Must start with <svg and set "
-                            'viewBox="0 0 640 320". Use currentColor for strokes and '
-                            "text so it works in light and dark mode. No scripts, no "
-                            "external references, no raster images."
+                            "Inline SVG illustrating this card's idea. Must start with "
+                            '<svg and set viewBox="0 0 640 360". Use currentColor for '
+                            "strokes and text so it works in light and dark mode. No "
+                            "scripts, no external references, no raster images. Empty "
+                            "string only when a picture genuinely adds nothing."
+                        ),
+                    },
+                    "diagram_caption": {
+                        "type": "string",
+                        "description": (
+                            "One sentence telling the reader what to notice in the "
+                            "diagram — not a restatement of its title. Empty when "
+                            "there is no diagram."
                         ),
                     },
                 },
@@ -236,6 +264,19 @@ def _generate(system: str, prompt: str, schema: dict, max_tokens: int = 16000) -
             ) from exc
         raise
 
+    # Log real token usage: cost estimates for this kind of generation are easy
+    # to get wrong by 5-10x, and the caps are only as good as the numbers behind
+    # them. Watch these lines in the platform log to set the caps from evidence.
+    usage = getattr(message, "usage", None)
+    if usage is not None:
+        log.info(
+            "generation ok model=%s in=%s out=%s cache_read=%s",
+            getattr(message, "model", MODEL),
+            getattr(usage, "input_tokens", "?"),
+            getattr(usage, "output_tokens", "?"),
+            getattr(usage, "cache_read_input_tokens", 0),
+        )
+
     if message.stop_reason == "refusal":
         raise LLMError(
             "Claude declined to generate this one. Try a differently-worded topic."
@@ -268,27 +309,49 @@ Rules for the six topics you return:
 - `why_now` must reference something concrete from today's log, not a generic tie-in.
 - No corporate filler. Write like a sharp colleague, not a course catalogue."""
 
-LESSON_SYSTEM = """You write short, interactive lessons in the style of a very good \
-explainer — Duolingo's pacing with a technical writer's precision.
+LESSON_SYSTEM = """You write interactive lessons in the style of a very good explainer \
+— Duolingo's pacing with a technical writer's precision and a good teacher's instinct \
+for the example that makes something click.
 
-Structure: 4 to 6 concept cards, then 6 questions.
+Structure: 6 to 8 concept cards, then 6 to 8 questions.
 
-Cards:
-- One idea per card. Build in order; a later card may assume an earlier one.
-- Concrete over abstract. Real numbers, real scenarios, named examples.
-- Include a `diagram_svg` for at least two cards where a picture genuinely helps \
-  (a process flow, a comparison, a distribution, a decision tree). Leave it as an \
-  empty string when a diagram would just be decoration.
-- SVG rules: viewBox="0 0 640 320", stroke and fill "currentColor" or explicit hex, \
-  font-size at least 13, no <script>, no external hrefs, no <image>.
+Teach for intuition first, rigour second:
+- Lead with the mechanism. Why does it work this way? What breaks if it doesn't? The \
+  reader should finish able to reason about a case you never mentioned, not just \
+  recognise the term.
+- Every abstract claim gets a concrete instance immediately — real numbers, a named \
+  scenario, an actual worked case. "Aggregation can multiply exposure" is weak; \
+  "twelve identical bad conveyancing files: one £2m limit if they aggregate, twelve \
+  if they don't" is the lesson.
+- Use the `intuition` field for the analogy or limiting case that makes the idea \
+  obvious — a comparison from ordinary life, or from a field the reader already knows. \
+  This is the sentence they'd repeat to a colleague.
+- Anticipate the misconception. If practitioners routinely get something backwards, \
+  say so explicitly and correct it.
+- Build in order. Later cards may lean on earlier ones; each card still has one idea.
+
+Diagrams carry real weight here — aim for one on most cards:
+- Choose the form that fits the idea: timelines for sequence, side-by-side panels for \
+  comparison, curves with labelled axes for relationships, flows with arrowheads for \
+  process, nested boxes for structure, small multiples for how a parameter changes \
+  things. Vary them across the lesson; six timelines is a failure.
+- A diagram must add information the prose doesn't. Label the axes, mark the values \
+  that matter, annotate the interesting region. A box containing the card's title is \
+  worse than no diagram.
+- SVG rules: viewBox="0 0 640 360", stroke and fill "currentColor" or explicit hex, \
+  font-size at least 13, keep all text inside the viewBox, no <script>, no external \
+  hrefs, no <image>. Arrowheads via <defs><marker> are encouraged for flows.
 
 Questions:
-- Test understanding, not recall of your own wording.
-- Distractors must be things a smart person could actually believe.
+- Test understanding, not recall of your wording. At least two should apply the idea \
+  to a situation the cards never showed.
+- Distractors must be things a smart person could actually believe — ideally the \
+  misconceptions you corrected.
 - Explanations teach something extra; never just restate the answer.
 
 The reader is a competent professional learning something adjacent to their work. \
-Don't flatter them, don't over-explain, don't hedge."""
+Assume intelligence, not knowledge: never condescend, and never leave a step implicit \
+because it feels obvious to you. Don't flatter, don't hedge, don't pad."""
 
 
 def suggest_topics(role: str, activities: list[str]) -> dict:
@@ -313,9 +376,14 @@ def generate_lesson(role: str, topic: dict, day_summary: str = "") -> dict:
         f"Level: {topic.get('difficulty', 'working')}\n\n"
         "Write the lesson."
     )
-    lesson = _generate(LESSON_SYSTEM, prompt, LESSON_SCHEMA)
+    # Headroom matters here: max_tokens caps thinking *and* output, and a lesson
+    # with a diagram on most of 8 cards is genuinely large. Too tight and it
+    # truncates mid-lesson rather than degrading gracefully.
+    lesson = _generate(LESSON_SYSTEM, prompt, LESSON_SCHEMA, max_tokens=32000)
     for card in lesson.get("cards", []):
         card["diagram_svg"] = sanitize_svg(card.get("diagram_svg", ""))
+        if not card["diagram_svg"]:
+            card["diagram_caption"] = ""
     return lesson
 
 

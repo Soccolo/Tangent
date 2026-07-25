@@ -46,7 +46,7 @@ IS_PRODUCTION = ENV == "production" or bool(os.environ.get("RENDER"))
 # a single generation (~$0.02-0.05). Set TANGENT_MODEL=claude-sonnet-5 to trade
 # some quality for roughly 40% of the cost.
 MODEL = os.environ.get("TANGENT_MODEL", "claude-opus-5")
-EFFORT = os.environ.get("TANGENT_EFFORT", "medium")
+EFFORT = os.environ.get("TANGENT_EFFORT", "high")
 
 # --- Spend guards -----------------------------------------------------------
 # Signup is open, so these are the only thing between a public URL and a large

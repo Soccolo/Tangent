@@ -33,7 +33,7 @@ services:
       - key: TANGENT_MODEL
         value: claude-opus-5
       - key: TANGENT_EFFORT
-        value: medium
+        value: high        # depth of the lessons; drop to medium to cut cost
       # Spend guards. Signup is open, so these are what stand between a public
       # URL and a surprising Anthropic bill. Tune once you see real usage.
       - key: TANGENT_DAILY_LESSON_CAP

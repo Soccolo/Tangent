@@ -10,8 +10,7 @@ const state = {
   activities: [],
   lesson: null,      // { id, content, pickedBy }
   step: 0,           // index into cards + questions
-  answers: [],       // chosen option index per question
-  revealed: false,
+  answers: [],       // chosen option index per question; also marks it answered
 };
 
 /* ------------------------------------------------------------------ utils */
@@ -339,7 +338,6 @@ function startLesson(lesson) {
   state.lesson = lesson;
   state.step = 0;
   state.answers = [];
-  state.revealed = false;
   render();
 }
 
@@ -436,6 +434,8 @@ function renderLesson() {
 
   view.innerHTML = `
     <div class="row" style="margin:16px 0 10px">
+      <button class="btn ghost small" id="back" ${state.step === 0 ? "disabled" : ""}
+        title="Previous step" aria-label="Previous step">←</button>
       <button class="btn ghost small" id="quit">Exit</button>
       <div class="progress" style="flex:1;margin:0"><i style="width:${pct}%"></i></div>
       <span class="tiny muted">${state.step + 1}/${total}</span>
@@ -443,6 +443,9 @@ function renderLesson() {
     <div class="card" id="stage"></div>`;
 
   document.getElementById("quit").onclick = exitLesson;
+  document.getElementById("back").onclick = () => {
+    if (state.step > 0) { state.step--; renderLesson(); }
+  };
 
   if (isCard) renderCard(cards[state.step], state.step === 0 ? content : null);
   else renderQuestion(questions[state.step - cards.length], state.step - cards.length);
@@ -457,7 +460,12 @@ function renderCard(card, header) {
       <hr style="border:0;border-top:1px solid var(--border);margin:18px 0">` : ""}
     <h2>${esc(card.heading)}</h2>
     <p>${prose(card.body)}</p>
-    ${card.diagram_svg ? `<div class="diagram">${card.diagram_svg}</div>` : ""}
+    ${card.diagram_svg ? `<figure class="diagram">
+      ${card.diagram_svg}
+      ${card.diagram_caption ? `<figcaption>${esc(card.diagram_caption)}</figcaption>` : ""}
+    </figure>` : ""}
+    ${card.intuition ? `<div class="intuition">
+      <b>The intuition</b>${prose(card.intuition)}</div>` : ""}
     ${(card.key_terms || []).length ? `<div class="terms">
       ${card.key_terms.map((t) => `<div class="term"><b>${esc(t.term)}</b> — ${esc(t.definition)}</div>`).join("")}
     </div>` : ""}
@@ -468,7 +476,9 @@ function renderCard(card, header) {
 function renderQuestion(question, qIndex) {
   const stage = document.getElementById("stage");
   const chosen = state.answers[qIndex];
-  const answered = state.revealed && chosen !== undefined;
+  // Derived per question, not a single flag — otherwise stepping back into an
+  // answered question would show it blank and let you answer twice.
+  const answered = chosen !== undefined;
 
   stage.innerHTML = `
     <div class="tag">Question ${qIndex + 1}</div>
@@ -491,13 +501,12 @@ function renderQuestion(question, qIndex) {
   stage.querySelectorAll("[data-opt]").forEach((b) => {
     b.onclick = () => {
       state.answers[qIndex] = Number(b.dataset.opt);
-      state.revealed = true;
       renderQuestion(question, qIndex);
     };
   });
 
   const next = document.getElementById("next");
-  if (next) next.onclick = () => { state.step++; state.revealed = false; renderLesson(); };
+  if (next) next.onclick = () => { state.step++; renderLesson(); };
 }
 
 async function renderFinish() {

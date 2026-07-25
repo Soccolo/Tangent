@@ -58,13 +58,30 @@ stays instant and you only pay for lessons somebody actually starts.
 
 ### Cost
 
-One digest is roughly 2–4k tokens; one lesson is roughly 6–10k. On Claude Opus 5
-($5/$25 per million) that's about **2–5¢ per lesson**. To cut that by ~60%, set
-`TANGENT_MODEL=claude-sonnet-5` in `.env` — worth A/B-ing on your own topics before
-deciding, since lesson quality *is* the product.
+**Measure, don't estimate.** Every generation logs its real token usage:
 
-`TANGENT_EFFORT` (`low`/`medium`/`high`/`xhigh`/`max`) is the other lever; it defaults
-to `medium`, which is already strong on Opus 5.
+```
+generation ok model=claude-opus-5 in=1240 out=118xx cache_read=0
+```
+
+Watch those lines in the Render log after your first few lessons and set the caps from
+what you actually see.
+
+For rough planning: a lesson is 6–8 cards with a diagram on most of them, so expect
+output in the low tens of thousands of tokens once thinking is included. At Opus 5's
+$25/million output that lands somewhere around **20–40¢ per lesson**, not the couple of
+pennies a shorter lesson would cost. Digests are far cheaper — a few cents at most.
+
+Three levers, cheapest first:
+
+| Lever | Effect |
+| --- | --- |
+| `TANGENT_EFFORT=medium` (or `low`) | Cuts thinking tokens noticeably; `high` is the default because depth is the point |
+| `TANGENT_MODEL=claude-sonnet-5` | Roughly 40% of Opus pricing — A/B it on your own topics first, lesson quality *is* the product |
+| Lower `TANGENT_DAILY_LESSON_CAP` | Fewer generations per person per day |
+
+**Set a monthly spend limit in the Anthropic Console.** The in-app caps are the first
+line; the Console limit is the one that holds when an estimate here turns out wrong.
 
 ### Safety notes
 
@@ -134,9 +151,12 @@ Signup is open, so these are load-bearing:
 | `TANGENT_DAILY_DIGEST_CAP` | 4 | Topic-set generations per account per day |
 | `TANGENT_GLOBAL_DAILY_CAP` | 300 | Generations across *all* users per day |
 
-Worst case per account is roughly **$0.38/day**; the global cap holds the whole site to
-around **$12/day** on Opus 5. Re-tune once you've seen real usage — but keep the global
-cap, it's what stops a hundred well-behaved strangers adding up to a bad month.
+These are counted in *generations*, so the money depends on lesson size — and lessons
+got substantially bigger when diagrams and depth went up. On the current settings a
+single account maxing out is order-of-magnitude **$2/day**, and the global cap is the
+only thing bounding the total. Set `TANGENT_GLOBAL_DAILY_CAP` from the token numbers in
+your log plus the monthly budget you're willing to lose, and back it with a hard limit
+in the Anthropic Console.
 
 **Failed generations consume quota deliberately.** Otherwise a prompt that reliably
 fails becomes a free infinite retry loop.

@@ -156,10 +156,26 @@ label { display: block; font-size: 14px; font-weight: 600; margin: 0 0 6px; }
 .progress > i { display: block; height: 100%; background: var(--brand); transition: width .3s ease; }
 
 .diagram {
-  margin: 16px 0; padding: 12px; border-radius: 12px;
+  margin: 20px 0; padding: 16px; border-radius: 12px;
   background: var(--surface-2); color: var(--text); overflow-x: auto;
 }
-.diagram svg { display: block; max-width: 100%; height: auto; margin: 0 auto; }
+.diagram svg { display: block; width: 100%; max-width: 640px; height: auto; margin: 0 auto; }
+.diagram figcaption {
+  margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border);
+  font-size: 13.5px; color: var(--muted); text-align: center;
+}
+
+/* The plain-language restatement — visually distinct so it reads as a pause,
+   not more body copy. */
+.intuition {
+  margin: 18px 0 0; padding: 14px 16px; border-radius: 12px;
+  background: var(--brand-soft); border-left: 3px solid var(--brand);
+  font-size: 15.5px;
+}
+.intuition b {
+  display: block; margin-bottom: 4px; color: var(--brand);
+  font-size: 12.5px; letter-spacing: .04em; text-transform: uppercase;
+}
 
 .terms { display: grid; gap: 8px; margin-top: 16px; }
 .term {
