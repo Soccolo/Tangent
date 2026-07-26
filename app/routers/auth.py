@@ -287,11 +287,15 @@ def update_me(
     user: User = Depends(current_user),
     db: OrmSession = Depends(get_db),
 ):
-    if body.display_name.strip():
+    if body.display_name is not None and body.display_name.strip():
         user.display_name = body.display_name.strip()
-    user.role = body.role.strip()
-    user.bio = body.bio.strip() or None
-    user.accent = body.accent.strip() if body.accent.strip() in ACCENTS else None
+    if body.role is not None:
+        user.role = body.role.strip()
+    if body.bio is not None:
+        user.bio = body.bio.strip() or None
+    if body.accent is not None:
+        # An unrecognised or empty accent means "back to the default".
+        user.accent = body.accent.strip() if body.accent.strip() in ACCENTS else None
 
     if body.avatar is not None:
         user.avatar = _clean_avatar(body.avatar)

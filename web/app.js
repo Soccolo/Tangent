@@ -119,6 +119,26 @@ function paintStats() {
     : initials(state.user.display_name, state.user.email);
 }
 
+/* Appearance choices apply and persist on click rather than on Save.
+   `state.user` is the source of truth for paintStats(), which runs on every
+   render — so a change that only touched the DOM was reverted by the next
+   navigation. Update state first (instant, survives navigation), then persist. */
+async function savePreference(patch) {
+  const previous = { ...state.user };
+  state.user = { ...state.user, ...patch };
+  if ("theme" in patch) applyTheme(state.user.theme);
+  if ("accent" in patch) applyAccent(state.user.accent);
+
+  try {
+    state.user = await api("/api/auth/me", { method: "PATCH", body: patch });
+  } catch (err) {
+    state.user = previous;               // put it back if the server refused
+    if ("theme" in patch) applyTheme(state.user.theme);
+    if ("accent" in patch) applyAccent(state.user.accent);
+    toast(err.message);
+  }
+}
+
 async function signOut() {
   try { await api("/api/auth/signout", { method: "POST" }); } catch { /* leaving anyway */ }
   state.user = null;
@@ -1454,14 +1474,13 @@ function renderProfile() {
     removeBtn.classList.add("hidden");
   };
 
-  let theme = u.theme || "system";
   document.getElementById("themePick").onclick = (e) => {
     const button = e.target.closest("[data-theme-opt]");
     if (!button) return;
-    theme = button.dataset.themeOpt;
+    const theme = button.dataset.themeOpt;
     view.querySelectorAll("[data-theme-opt]").forEach((b) =>
       b.className = `btn small ${b.dataset.themeOpt === theme ? "" : "ghost"}`);
-    applyTheme(theme);   // live preview
+    savePreference({ theme });
   };
 
   const defLevel = document.getElementById("defaultLevel");
@@ -1472,14 +1491,13 @@ function renderProfile() {
   paintRange(defLevel, document.getElementById("defLevelNum"));
   defLevel.oninput = () => paintRange(defLevel, document.getElementById("defLevelNum"));
 
-  let accent = u.accent || "violet";
   document.getElementById("swatches").onclick = (e) => {
     const button = e.target.closest("[data-accent]");
     if (!button) return;
-    accent = button.dataset.accent;
+    const accent = button.dataset.accent;
     view.querySelectorAll("[data-accent]").forEach((s) =>
       s.setAttribute("aria-pressed", String(s.dataset.accent === accent)));
-    applyAccent(accent === "violet" ? "" : accent);  // live preview
+    savePreference({ accent: accent === "violet" ? "" : accent });
   };
 
   document.getElementById("profileForm").onsubmit = async (e) => {
@@ -1487,13 +1505,13 @@ function renderProfile() {
     const button = document.getElementById("saveProfile");
     busy(button, true, "Saving…");
     try {
+      // Theme and accent are deliberately absent: they save on click, and
+      // re-sending them here would just race with that.
       const body = {
         display_name: document.getElementById("name").value,
         role: document.getElementById("roleEdit").value,
         bio: document.getElementById("bioEdit").value,
-        accent: accent === "violet" ? "" : accent,
         contribute_to_library: document.getElementById("contribute").checked,
-        theme,
         default_level: Number(defLevel.value),
       };
       if (pendingAvatar !== undefined) body.avatar = pendingAvatar;

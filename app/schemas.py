@@ -14,10 +14,18 @@ class SignIn(BaseModel):
 
 
 class ProfileUpdate(BaseModel):
-    display_name: str = Field(default="", max_length=120)
-    role: str = Field(default="", max_length=2000)
-    bio: str = Field(default="", max_length=280)
-    accent: str = Field(default="", max_length=16)
+    """Every field optional, and omission means "leave alone".
+
+    This has to be a genuine partial update: the UI patches a single preference
+    (theme, accent) the moment it's clicked, and an absent field previously
+    overwrote the stored value with an empty string — so saving a theme would
+    silently erase the user's role and bio.
+    """
+
+    display_name: str | None = Field(default=None, max_length=120)
+    role: str | None = Field(default=None, max_length=2000)
+    bio: str | None = Field(default=None, max_length=280)
+    accent: str | None = Field(default=None, max_length=16)
     # A resized data: URL, not a file — see models.User.avatar. Generous ceiling
     # because base64 inflates ~33%; the client resizes to 256px before sending.
     avatar: str | None = Field(default=None, max_length=400_000)
