@@ -22,6 +22,8 @@ class ProfileUpdate(BaseModel):
     # because base64 inflates ~33%; the client resizes to 256px before sending.
     avatar: str | None = Field(default=None, max_length=400_000)
     contribute_to_library: bool | None = None
+    theme: str | None = Field(default=None, max_length=16)
+    default_level: int | None = Field(default=None, ge=1, le=10)
 
 
 class ForgotPassword(BaseModel):
@@ -44,7 +46,21 @@ class ActivityIn(BaseModel):
     source: str = Field(default="manual", max_length=32)
 
 
+class PlacementResult(BaseModel):
+    probes: str = Field(default="", max_length=500)
+    prompt: str = Field(default="", max_length=1000)
+    correct: bool
+
+
 class ChoosePick(BaseModel):
+    index: int = Field(ge=0, le=20)
+    level: int = Field(default=5, ge=1, le=10)
+    # Optional: the two diagnostic questions are a shortcut to a better-pitched
+    # lesson, not a gate. Skipping them just means we trust the self-rating.
+    placement: list[PlacementResult] = Field(default_factory=list, max_length=4)
+
+
+class PlacementAsk(BaseModel):
     index: int = Field(ge=0, le=20)
 
 

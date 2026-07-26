@@ -14,6 +14,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session as OrmSession
 
 from ..db import get_db
+from ..llm import shuffle_options
 from ..models import Lesson, LibraryLesson, User
 from ..security import current_user
 
@@ -35,13 +36,36 @@ def topic_key(title: str) -> str:
     return " ".join(words)[:255]
 
 
-def find_match(db: OrmSession, title: str) -> LibraryLesson | None:
+def level_band(level: int | None) -> str:
+    """Collapse a 1-10 self-rating into one of three teaching registers.
+
+    Banding rather than keying on the raw level is the whole compromise: ten
+    distinct cache keys per topic would cut the library hit rate by an order of
+    magnitude and undo the economics. Three bands keep reuse high while making
+    the rating mean something — a 2 and a 9 genuinely never share a lesson.
+    """
+    if not level:
+        return "working"
+    if level <= 3:
+        return "new"
+    if level <= 7:
+        return "working"
+    return "deep"
+
+
+def find_match(db: OrmSession, title: str, level: int | None = None) -> LibraryLesson | None:
     key = topic_key(title)
     if not key:
         return None
+    band = level_band(level)
     return db.scalar(
         select(LibraryLesson)
-        .where(LibraryLesson.topic_key == key)
+        .where(
+            LibraryLesson.topic_key == key,
+            # Entries written before banding existed carry NULL; treat them as
+            # the middle register rather than stranding them.
+            func.coalesce(LibraryLesson.level_band, "working") == band,
+        )
         .order_by(LibraryLesson.times_used.desc())
         .limit(1)
     )
@@ -56,6 +80,7 @@ def publish(
     author: User | None,
     category: str = "",
     difficulty: str = "",
+    level: int | None = None,
 ) -> LibraryLesson | None:
     """Add a freshly generated lesson to the library, unless the author opted out."""
     if author is not None and author.contribute_to_library is False:
@@ -63,10 +88,17 @@ def publish(
     key = topic_key(title)
     if not key:
         return None
-    if db.scalar(select(LibraryLesson).where(LibraryLesson.topic_key == key)):
-        return None  # already written; don't accumulate near-duplicates
+    band = level_band(level)
+    if db.scalar(
+        select(LibraryLesson).where(
+            LibraryLesson.topic_key == key,
+            func.coalesce(LibraryLesson.level_band, "working") == band,
+        )
+    ):
+        return None  # already written at this level; don't accumulate duplicates
     entry = LibraryLesson(
         topic_key=key,
+        level_band=band,
         title=title,
         blurb=blurb or "",
         category=category,
@@ -88,6 +120,7 @@ def _serialize(entry: LibraryLesson, mine: bool = False) -> dict:
         "blurb": entry.blurb,
         "category": entry.category,
         "difficulty": entry.difficulty,
+        "level_band": entry.level_band or "working",
         "author": entry.author_name,
         "times_used": entry.times_used,
         "cards": len(content.get("cards", [])),
@@ -147,13 +180,16 @@ def add_to_my_lessons(
     if existing is not None:
         return {"id": existing.id, "already_added": True}
 
-    content = json.loads(entry.content_json)
+    # Re-shuffle per copy: two colleagues comparing notes shouldn't find the
+    # answers in the same places, and it re-randomises anything written before
+    # the shuffle existed.
+    content = shuffle_options(json.loads(entry.content_json))
     lesson = Lesson(
         user_id=user.id,
         topic_title=entry.title,
         topic_blurb=entry.blurb,
         picked_by="library",
-        content_json=entry.content_json,
+        content_json=json.dumps(content),
         status="ready",
         total_questions=len(content.get("questions", [])),
         library_id=entry.id,

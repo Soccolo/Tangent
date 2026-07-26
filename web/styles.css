@@ -612,3 +612,132 @@ header.top .home:active { transform: translateY(1px); }
   cursor: pointer; margin: 0;
 }
 .check input { width: auto; margin: 2px 0 0; accent-color: var(--brand); }
+
+/* ==========================================================================
+   Light theme
+   Applied via data-theme on <html>: "light" forces it, "dark" forces dark, and
+   absent means follow the OS. Most of the work is retinting the tokens above;
+   the rules that follow exist because the dark theme hard-codes a handful of
+   colours that can't survive a light background.
+   ========================================================================== */
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) { color-scheme: light; }
+}
+:root[data-theme="light"] { color-scheme: light; }
+
+/* The token retint, shared by "forced light" and "system says light". */
+:root[data-theme="light"],
+:root[data-theme="light"][data-accent] {
+  --bg:          #f4f4f8;
+  --surface:     #ffffff;
+  --surface-2:   #f0f0f6;
+  --border:      #dcdce6;
+  --border-soft: rgba(24, 24, 40, .12);
+  --text:        #1a1b26;
+  --muted:       #5c6076;
+
+  --brand-fill:  #e4e0fb;
+  --brand-soft:  #eceaff;
+  --brand-pale:  #4b3fa0;
+
+  --good-soft:   #dcf6e8;
+  --bad-soft:    #fde4ea;
+
+  --shadow:      0 0 0 1px var(--border), 0 8px 24px rgba(24, 24, 40, .08);
+  --shadow-lg:   0 0 0 1px #cfcfe4, 0 16px 40px rgba(24, 24, 40, .14);
+  --glow:        0 0 22px -8px rgba(105, 92, 190, .55);
+}
+
+/* Accents need darker mid-tones on a light background to keep text legible. */
+:root[data-theme="light"] { --brand: #6355c4; --brand-bright: #4d3fae; }
+:root[data-theme="light"][data-accent="ember"] { --brand: #b96a34; --brand-bright: #96521f; --brand-pale: #7a4319; --brand-fill: #fbe6d6; --brand-soft: #fdf0e6; }
+:root[data-theme="light"][data-accent="teal"]  { --brand: #2f8b86; --brand-bright: #1f6d68; --brand-pale: #14524e; --brand-fill: #d5efed; --brand-soft: #e6f6f5; }
+:root[data-theme="light"][data-accent="rose"]  { --brand: #bd5379; --brand-bright: #9b3c5f; --brand-pale: #7a2b48; --brand-fill: #fbdde7; --brand-soft: #fdecf1; }
+:root[data-theme="light"][data-accent="lime"]  { --brand: #5f8a2c; --brand-bright: #4a6e20; --brand-pale: #375217; --brand-fill: #e3f2cf; --brand-soft: #eff8e2; }
+
+/* Rules the dark theme hard-codes. */
+:root[data-theme="light"] .glow {
+  background:
+    radial-gradient(680px 480px at 50% -6%, rgba(99, 85, 196, .13), transparent 60%),
+    radial-gradient(520px 420px at 92% 8%,  rgba(124, 111, 199, .09), transparent 60%),
+    radial-gradient(460px 400px at 4% 40%,  rgba(99, 85, 196, .07), transparent 60%);
+}
+:root[data-theme="light"] ::selection { background: rgba(99, 85, 196, .22); }
+:root[data-theme="light"] .btn {
+  background: linear-gradient(180deg, var(--brand), var(--brand-bright));
+  color: #fff;
+}
+/* The .btn override above sets a background-image, which outranks the earlier
+   `background: transparent` on .ghost purely by source order — leaving brand
+   text sitting on the brand gradient. Clear the image explicitly. */
+:root[data-theme="light"] .btn.ghost {
+  background-image: none; background-color: transparent;
+  color: var(--brand-bright);
+}
+:root[data-theme="light"] .btn.subtle {
+  background-image: none; background-color: var(--surface-2);
+  color: var(--brand-bright);
+}
+:root[data-theme="light"] input:hover,
+:root[data-theme="light"] textarea:hover { border-color: rgba(24, 24, 40, .28); }
+:root[data-theme="light"] label { color: rgba(26, 27, 38, .72); }
+:root[data-theme="light"] .logrow > div:first-child::before { background: var(--brand); }
+:root[data-theme="light"] .topic:hover { box-shadow: 0 0 20px -8px rgba(99, 85, 196, .5); }
+:root[data-theme="light"] .tag { background: #e6e6ef; color: #4a4e63; }
+:root[data-theme="light"] .tag.cat { background: var(--brand-fill); color: var(--brand-pale); }
+:root[data-theme="light"] .progress > i,
+:root[data-theme="light"] .levelbar > i { background: linear-gradient(90deg, var(--brand), var(--brand-bright)); }
+:root[data-theme="light"] .option:hover:not([disabled]) { background: var(--surface-2); }
+:root[data-theme="light"] .option.correct,
+:root[data-theme="light"] .verdict.correct { color: #145c3a; }
+:root[data-theme="light"] .option.wrong,
+:root[data-theme="light"] .verdict.wrong { color: #8c2340; }
+:root[data-theme="light"] .bigscore .muted { color: rgba(26, 27, 38, .35); }
+:root[data-theme="light"] .levelup { background: linear-gradient(90deg, var(--brand-fill), #f6e6c4); color: var(--brand-pale); }
+:root[data-theme="light"] .heat span.on { box-shadow: 0 0 8px -2px rgba(99, 85, 196, .6); }
+:root[data-theme="light"] nav.tabs button { color: rgba(26, 27, 38, .6); }
+:root[data-theme="light"] nav.tabs button.active { background: var(--brand-fill); }
+:root[data-theme="light"] nav.tabs::before { box-shadow: 0 -2px 20px rgba(24, 24, 40, .10); }
+:root[data-theme="light"] .toast { background: #1a1b26; color: #f4f4f8; }
+:root[data-theme="light"] .spinner { border-color: var(--border); border-top-color: var(--brand); }
+:root[data-theme="light"] header.top .home:hover,
+:root[data-theme="light"] .btn.ghost:hover,
+:root[data-theme="light"] .btn.subtle:hover,
+:root[data-theme="light"] .capture:hover,
+:root[data-theme="light"] .wip:hover { background: rgba(99, 85, 196, .08); }
+:root[data-theme="light"] .diagram { background: var(--surface-2); }
+
+/* ------------------------------------------------------- level slider -- */
+
+.levelpick { margin-top: 14px; }
+.levelpick .row { align-items: center; gap: 12px; }
+.levelnum {
+  flex: none; width: 44px; height: 44px; border-radius: 12px;
+  display: grid; place-items: center;
+  background: var(--brand-fill); color: var(--brand-pale);
+  font-size: 19px; font-weight: 700;
+}
+input[type=range] {
+  flex: 1; min-width: 0; -webkit-appearance: none; appearance: none;
+  height: 6px; border-radius: 999px; padding: 0;
+  background: linear-gradient(90deg, var(--brand) var(--fill, 50%), var(--surface-2) var(--fill, 50%));
+  border: 0; cursor: pointer;
+}
+input[type=range]::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: 20px; height: 20px; border-radius: 50%;
+  background: var(--brand); border: 2px solid var(--surface);
+  box-shadow: var(--glow); cursor: pointer;
+}
+input[type=range]::-moz-range-thumb {
+  width: 20px; height: 20px; border-radius: 50%;
+  background: var(--brand); border: 2px solid var(--surface); cursor: pointer;
+}
+.levelhint { margin-top: 10px; font-size: 13px; color: var(--muted); min-height: 2.6em; }
+
+.placement { margin-top: 16px; }
+.placement .qnum {
+  font-size: 11.5px; font-weight: 700; letter-spacing: .06em;
+  text-transform: uppercase; color: var(--muted);
+}

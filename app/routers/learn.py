@@ -16,10 +16,16 @@ from ..config import (
     GLOBAL_DAILY_CAP,
 )
 from ..db import SessionLocal, get_db
-from ..llm import LLMError, generate_lesson, suggest_topics
+from ..llm import (
+    LLMError,
+    generate_lesson,
+    placement_questions,
+    shuffle_options,
+    suggest_topics,
+)
 from ..models import Activity, Digest, Generation, Lesson, User, utcnow
 from .library import find_match, publish
-from ..schemas import ActivityIn, AnswerSet, ChoosePick
+from ..schemas import ActivityIn, AnswerSet, ChoosePick, PlacementAsk
 from ..security import current_user
 
 log = logging.getLogger("tangent.learn")
@@ -52,12 +58,15 @@ def claim_quota(db: OrmSession, user_id: int, kind: str) -> None:
         "lesson": DAILY_LESSON_CAP,
         "digest": DAILY_DIGEST_CAP,
         "capture": DAILY_CAPTURE_CAP,
+        # Two small questions on the cheap model; bounded generously.
+        "placement": DAILY_LESSON_CAP * 2,
     }[kind]
     if used_today(db, user_id, kind) >= per_user_cap:
         noun = {
             "lesson": "lessons",
             "digest": "topic refreshes",
             "capture": "recording time",
+            "placement": "topic check-ins",
         }[kind]
         raise HTTPException(
             status.HTTP_429_TOO_MANY_REQUESTS,
@@ -248,6 +257,53 @@ def _pick_wildcard(topics: list[dict], chosen: int) -> int:
     return random.choice(tied)
 
 
+def effective_level(self_rated: int, placement: list[dict]) -> int:
+    """Reconcile what someone says they know with what they demonstrated.
+
+    People are routinely modest or overconfident about their own level, and two
+    questions is a weak but real signal. Getting both right nudges up, both
+    wrong nudges down harder — an overestimate produces a lesson pitched over
+    someone's head, which is the more damaging failure.
+    """
+    if not placement:
+        return self_rated
+    correct = sum(1 for item in placement if item.get("correct"))
+    if correct == len(placement):
+        return min(10, self_rated + 2)
+    if correct == 0:
+        return max(1, self_rated - 3)
+    return self_rated
+
+
+@router.post("/digest/today/placement")
+def get_placement(
+    body: PlacementAsk,
+    user: User = Depends(current_user),
+    db: OrmSession = Depends(get_db),
+):
+    """Two diagnostic questions for a topic, before committing to a lesson.
+
+    Answers are graded in the browser and reported back. That's deliberate:
+    there's nothing to win by cheating a self-assessment, and keeping the
+    grading client-side avoids storing per-topic state for a throwaway quiz.
+    """
+    digest = db.scalar(
+        select(Digest).where(Digest.user_id == user.id, Digest.day == date.today())
+    )
+    if digest is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No digest for today yet")
+    topics = json.loads(digest.topics_json)
+    if body.index >= len(topics):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "No topic at that position")
+
+    claim_quota(db, user.id, "placement")
+    try:
+        questions = placement_questions(user.role, topics[body.index])
+    except LLMError as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+    return {"questions": questions}
+
+
 @router.post("/digest/today/choose")
 def choose_topic(
     body: ChoosePick,
@@ -270,7 +326,20 @@ def choose_topic(
     digest.chosen_index = body.index
     digest.wildcard_index = wildcard
 
-    for index, picked_by in ((body.index, "user"), (wildcard, "app")):
+    placement = [p.model_dump() for p in body.placement]
+    chosen_level = effective_level(body.level, placement)
+    # The wildcard is chosen precisely because it sits outside their lane, so
+    # their rating for the topic they picked says nothing about it. Assume less
+    # knowledge there, never more.
+    wildcard_level = min(chosen_level, 3)
+
+    # Remember the rating as the default for next time.
+    user.default_level = body.level
+
+    for index, picked_by, level in (
+        (body.index, "user", chosen_level),
+        (wildcard, "app", wildcard_level),
+    ):
         topic = topics[index]
         db.add(
             Lesson(
@@ -280,6 +349,10 @@ def choose_topic(
                 topic_blurb=topic.get("blurb", ""),
                 picked_by=picked_by,
                 content_json="",
+                level=level,
+                placement_json=(
+                    json.dumps(placement) if placement and picked_by == "user" else None
+                ),
             )
         )
     db.commit()
@@ -303,7 +376,14 @@ def _topic_for(lesson: Lesson, db: OrmSession) -> dict:
     return {"title": lesson.topic_title, "blurb": lesson.topic_blurb}
 
 
-def _generate_lesson_job(lesson_id: int, role: str, topic: dict, summary: str) -> None:
+def _generate_lesson_job(
+    lesson_id: int,
+    role: str,
+    topic: dict,
+    summary: str,
+    level: int | None = None,
+    placement: list[dict] | None = None,
+) -> None:
     """Runs after the response is sent, on its own DB session."""
     db = SessionLocal()
     try:
@@ -311,7 +391,7 @@ def _generate_lesson_job(lesson_id: int, role: str, topic: dict, summary: str) -
         if lesson is None:
             return
         try:
-            content = generate_lesson(role, topic, summary)
+            content = generate_lesson(role, topic, summary, level, placement)
         except Exception as exc:  # noqa: BLE001 - the status field is the report
             log.exception("Lesson %s generation failed", lesson_id)
             lesson.status = "failed"
@@ -335,6 +415,7 @@ def _generate_lesson_job(lesson_id: int, role: str, topic: dict, summary: str) -
             author=author,
             category=topic.get("category", "") if isinstance(topic, dict) else "",
             difficulty=topic.get("difficulty", "") if isinstance(topic, dict) else "",
+            level=level,
         )
         if entry is not None:
             lesson.library_id = entry.id
@@ -391,10 +472,10 @@ def get_lesson(
     # instant and free — this is what stops cost scaling with users rather than
     # with topics.
     if LIBRARY_REUSE:
-        match = find_match(db, lesson.topic_title)
+        match = find_match(db, lesson.topic_title, lesson.level)
         if match is not None:
-            content = json.loads(match.content_json)
-            lesson.content_json = match.content_json
+            content = shuffle_options(json.loads(match.content_json))
+            lesson.content_json = json.dumps(content)
             lesson.total_questions = len(content.get("questions", []))
             lesson.status = "ready"
             lesson.library_id = match.id
@@ -417,7 +498,10 @@ def get_lesson(
     lesson.status = "generating"
     db.commit()
 
-    background.add_task(_generate_lesson_job, lesson.id, user.role, topic, summary)
+    placement = json.loads(lesson.placement_json) if lesson.placement_json else None
+    background.add_task(
+        _generate_lesson_job, lesson.id, user.role, topic, summary, lesson.level, placement
+    )
     return {"id": lesson.id, "status": "generating", "picked_by": lesson.picked_by}
 
 

@@ -39,6 +39,10 @@ class User(Base):
     # are subject matter ("limitation periods"), never the activity log that
     # produced them — but it's still the user's call.
     contribute_to_library: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    # "system" | "light" | "dark". Null means system.
+    theme: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    # Default self-rated knowledge, 1-10, used to pre-set the per-lesson slider.
+    default_level: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     xp: Mapped[int] = mapped_column(Integer, default=0)
@@ -84,6 +88,10 @@ class LibraryLesson(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     # Normalised title — the lookup key for "have we already written this?"
     topic_key: Mapped[str] = mapped_column(String(255), index=True)
+    # Lessons differ by assumed prior knowledge, so the cache key does too —
+    # but banded, not per-level: ten bands would cut the hit rate tenfold and
+    # undo the point of having a library.
+    level_band: Mapped[str | None] = mapped_column(String(16), nullable=True)
     title: Mapped[str] = mapped_column(String(255))
     blurb: Mapped[str] = mapped_column(Text, default="")
     category: Mapped[str] = mapped_column(String(32), default="")
@@ -189,5 +197,9 @@ class Lesson(Base):
     library_id: Mapped[int | None] = mapped_column(
         ForeignKey("library_lessons.id"), nullable=True
     )
+    # What the learner said they already knew, 1-10, at the moment they picked.
+    level: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Their answers to the two diagnostic questions, if they took them.
+    placement_json: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     user: Mapped[User] = relationship(back_populates="lessons")

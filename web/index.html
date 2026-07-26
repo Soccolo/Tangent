@@ -6,6 +6,21 @@
   <meta name="theme-color" content="#161826">
   <title>Tangent — learn the ring around your job</title>
   <link rel="icon" href="/static/owl.svg">
+  <script>
+    /* Resolve the theme before the stylesheet paints, or the app flashes dark
+       on the way to light. "system" is resolved here rather than in CSS so the
+       light token block has a single selector to key off. */
+    (function () {
+      try {
+        var pref = localStorage.getItem("tangent.theme") || "system";
+        var light = pref === "light" ||
+          (pref === "system" && window.matchMedia("(prefers-color-scheme: light)").matches);
+        document.documentElement.setAttribute("data-theme", light ? "light" : "dark");
+        var accent = localStorage.getItem("tangent.accent");
+        if (accent) document.documentElement.setAttribute("data-accent", accent);
+      } catch (e) { /* private mode: fall through to dark */ }
+    })();
+  </script>
   <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>

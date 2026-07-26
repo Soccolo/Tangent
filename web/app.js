@@ -72,6 +72,29 @@ function applyAccent(accent) {
   const root = document.documentElement;
   if (accent) root.setAttribute("data-accent", accent);
   else root.removeAttribute("data-accent");
+  try {
+    if (accent) localStorage.setItem("tangent.accent", accent);
+    else localStorage.removeItem("tangent.accent");
+  } catch { /* private mode */ }
+}
+
+const systemPrefersLight = () =>
+  window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches;
+
+/* "system" is resolved to a concrete value here, matching the inline script in
+   index.html, so the CSS only ever sees data-theme="light" or "dark". */
+function applyTheme(theme) {
+  const pref = theme || "system";
+  const light = pref === "light" || (pref === "system" && systemPrefersLight());
+  document.documentElement.setAttribute("data-theme", light ? "light" : "dark");
+  try { localStorage.setItem("tangent.theme", pref); } catch { /* private mode */ }
+}
+
+// Follow the OS live, but only while the user is actually on "system".
+if (window.matchMedia) {
+  window.matchMedia("(prefers-color-scheme: light)").addEventListener("change", () => {
+    if ((state.user?.theme || "system") === "system") applyTheme("system");
+  });
 }
 
 function paintStats() {
@@ -85,6 +108,7 @@ function paintStats() {
     el.classList.toggle("hidden", !signedIn);
   }
   applyAccent(signedIn ? state.user.accent : "");
+  if (signedIn) applyTheme(state.user.theme);
   if (!signedIn) return;
 
   document.getElementById("streakNum").textContent = state.user.current_streak;
@@ -404,6 +428,148 @@ if (window.TangentCapture) {
   TangentCapture.on("error", (message) => toast(message));
 }
 
+/* --- picking a topic: level, and optionally two diagnostic questions --- */
+
+const LEVEL_HINT = [
+  "",
+  "Never come across it. Start from what the thing even is.",
+  "Heard the term, couldn't define it.",
+  "Could define it, couldn't use it.",
+  "Know the basics, fuzzy on the mechanism.",
+  "Comfortable with the fundamentals, new to the detail.",
+  "Work near this. Skip the introductions.",
+  "Use it occasionally. Go for the edge cases.",
+  "Solid working knowledge. Show me what's contested.",
+  "Near-practitioner. Assume notation and argument.",
+  "Deep. Only the surprising parts are worth my time.",
+];
+
+function renderPick(index) {
+  const topic = state.digest.topics[index];
+  const level = state.pickLevel || state.user.default_level || 5;
+  state.pickLevel = level;
+
+  view.innerHTML = `
+    <div class="card">
+      <button class="btn ghost small" id="pickBack">← All topics</button>
+      <div class="row wrap" style="gap:6px;margin-top:14px">
+        <span class="tag cat">${esc(categoryLabel(topic.category))}</span>
+        <span class="tag">${esc(topic.difficulty)}</span>
+      </div>
+      <h2 style="margin-top:10px">${esc(topic.title)}</h2>
+      <p class="muted small">${esc(topic.blurb)}</p>
+
+      <div class="levelpick">
+        <label for="lvl">How much do you already know about this?</label>
+        <div class="row">
+          <span class="levelnum" id="lvlNum">${level}</span>
+          <input type="range" id="lvl" min="1" max="10" step="1" value="${level}">
+        </div>
+        <div class="levelhint" id="lvlHint">${esc(LEVEL_HINT[level])}</div>
+      </div>
+
+      <button class="btn wide" id="startPick" style="margin-top:8px">
+        Write my lesson</button>
+      <button class="btn ghost wide" id="takePlacement" style="margin-top:10px">
+        Not sure? Answer two quick questions</button>
+      <p class="tiny muted center" style="margin-top:8px">Two questions about this topic
+        so the lesson starts in the right place. Nothing is scored.</p>
+      <div id="placementSlot"></div>
+    </div>`;
+
+  const slider = document.getElementById("lvl");
+  const paint = () => {
+    slider.style.setProperty("--fill", `${((slider.value - 1) / 9) * 100}%`);
+    document.getElementById("lvlNum").textContent = slider.value;
+    document.getElementById("lvlHint").textContent = LEVEL_HINT[slider.value];
+    state.pickLevel = Number(slider.value);
+  };
+  paint();
+  slider.oninput = paint;
+
+  document.getElementById("pickBack").onclick = () => { state.pickLevel = null; renderToday(); };
+  document.getElementById("startPick").onclick = (e) => confirmPick(index, [], e.currentTarget);
+  document.getElementById("takePlacement").onclick = (e) => runPlacement(index, e.currentTarget);
+}
+
+async function runPlacement(index, button) {
+  busy(button, true, "Writing two questions…");
+  let questions;
+  try {
+    ({ questions } = await api("/api/digest/today/placement", {
+      method: "POST", body: { index },
+    }));
+  } catch (err) { busy(button, false); toast(err.message); return; }
+  busy(button, false);
+  button.classList.add("hidden");
+  document.getElementById("startPick").classList.add("hidden");
+
+  const answers = [];
+  const slot = document.getElementById("placementSlot");
+
+  const paintQuestion = (qi) => {
+    const q = questions[qi];
+    slot.innerHTML = `
+      <div class="placement">
+        <div class="qnum">Question ${qi + 1} of ${questions.length}</div>
+        <h3 style="margin-top:8px">${esc(q.prompt)}</h3>
+        <div class="options">
+          ${q.options.map((o, i) => `<button class="option" data-opt="${i}">${esc(o)}</button>`).join("")}
+        </div>
+      </div>`;
+    slot.querySelectorAll("[data-opt]").forEach((b) => {
+      b.onclick = () => {
+        // Graded here, not on the server: it's a self-assessment, so there's
+        // nothing to gain by cheating and no state worth storing.
+        answers.push({
+          probes: q.probes || "",
+          prompt: q.prompt,
+          correct: Number(b.dataset.opt) === q.answer_index,
+        });
+        if (qi + 1 < questions.length) paintQuestion(qi + 1);
+        else finish();
+      };
+    });
+  };
+
+  const finish = () => {
+    const correct = answers.filter((a) => a.correct).length;
+    const self = state.pickLevel;
+    const adjusted = correct === answers.length ? Math.min(10, self + 2)
+      : correct === 0 ? Math.max(1, self - 3) : self;
+    slot.innerHTML = `
+      <div class="placement">
+        <div class="verdict ${correct === answers.length ? "correct" : correct === 0 ? "wrong" : ""}"
+          style="${correct && correct < answers.length ? "background:var(--surface-2)" : ""}">
+          <b>${correct} of ${answers.length} right</b>
+          ${adjusted > self
+            ? `You know more than you gave yourself credit for — pitching this at ${adjusted} instead of ${self}.`
+            : adjusted < self
+            ? `We'll start further back than ${self} and build up, at ${adjusted}.`
+            : `That matches roughly where you put yourself, so we'll keep ${self}.`}
+        </div>
+        <button class="btn wide" id="startAfter">Write my lesson</button>
+      </div>`;
+    document.getElementById("startAfter").onclick = (e) =>
+      confirmPick(index, answers, e.currentTarget);
+  };
+
+  paintQuestion(0);
+}
+
+async function confirmPick(index, placement, button) {
+  busy(button, true, "Setting up…");
+  try {
+    state.digest = await api("/api/digest/today/choose", {
+      method: "POST",
+      body: { index, level: state.pickLevel || 5, placement },
+    });
+    state.pickLevel = null;
+    state.user = await api("/api/auth/me");
+    renderToday();
+  } catch (err) { busy(button, false); toast(err.message); }
+}
+
 /* --- password reset --- */
 
 function renderForgot() {
@@ -593,15 +759,7 @@ function renderToday() {
   if (refresh) refresh.onclick = () => buildDigest(refresh, true);
 
   view.querySelectorAll("[data-pick]").forEach((b) => {
-    b.onclick = async () => {
-      busy(b, true, "Picking…");
-      try {
-        state.digest = await api("/api/digest/today/choose", {
-          method: "POST", body: { index: Number(b.dataset.pick) },
-        });
-        renderToday();
-      } catch (err) { busy(b, false); toast(err.message); }
-    };
+    b.onclick = () => renderPick(Number(b.dataset.pick));
   });
 
   view.querySelectorAll("[data-lesson]").forEach((b) => {
@@ -1219,6 +1377,25 @@ function renderProfile() {
           </div>
         </div>
 
+        <div class="field"><label>Theme</label>
+          <div class="row wrap" id="themePick">
+            ${["system", "light", "dark"].map((t) => `
+              <button type="button" class="btn small ${(u.theme || "system") === t ? "" : "ghost"}"
+                data-theme-opt="${t}">${t[0].toUpperCase() + t.slice(1)}</button>`).join("")}
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="defaultLevel">Default starting level</label>
+          <div class="row">
+            <span class="levelnum" id="defLevelNum">${u.default_level || 5}</span>
+            <input type="range" id="defaultLevel" min="1" max="10" step="1"
+              value="${u.default_level || 5}">
+          </div>
+          <div class="tiny muted" style="margin-top:6px">Where the slider starts when you
+            pick a topic. You can change it per lesson.</div>
+        </div>
+
         <div class="field">
           <label>Shared library</label>
           <label class="check">
@@ -1277,6 +1454,24 @@ function renderProfile() {
     removeBtn.classList.add("hidden");
   };
 
+  let theme = u.theme || "system";
+  document.getElementById("themePick").onclick = (e) => {
+    const button = e.target.closest("[data-theme-opt]");
+    if (!button) return;
+    theme = button.dataset.themeOpt;
+    view.querySelectorAll("[data-theme-opt]").forEach((b) =>
+      b.className = `btn small ${b.dataset.themeOpt === theme ? "" : "ghost"}`);
+    applyTheme(theme);   // live preview
+  };
+
+  const defLevel = document.getElementById("defaultLevel");
+  const paintRange = (input, label) => {
+    input.style.setProperty("--fill", `${((input.value - 1) / 9) * 100}%`);
+    if (label) label.textContent = input.value;
+  };
+  paintRange(defLevel, document.getElementById("defLevelNum"));
+  defLevel.oninput = () => paintRange(defLevel, document.getElementById("defLevelNum"));
+
   let accent = u.accent || "violet";
   document.getElementById("swatches").onclick = (e) => {
     const button = e.target.closest("[data-accent]");
@@ -1298,6 +1493,8 @@ function renderProfile() {
         bio: document.getElementById("bioEdit").value,
         accent: accent === "violet" ? "" : accent,
         contribute_to_library: document.getElementById("contribute").checked,
+        theme,
+        default_level: Number(defLevel.value),
       };
       if (pendingAvatar !== undefined) body.avatar = pendingAvatar;
       state.user = await api("/api/auth/me", { method: "PATCH", body });
