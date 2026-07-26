@@ -53,11 +53,12 @@ EFFORT = os.environ.get("TANGENT_EFFORT", "high")
 # Anthropic bill. Per-user caps stop one account running away; the global cap is
 # the backstop against a hundred accounts each behaving "reasonably".
 # Screen-capture extraction is a different job from writing a lesson: it reads
-# a handful of downscaled frames and names the task. Cheaper models do it well,
-# and it runs many times an hour — so this is the single biggest cost lever in
-# the app. Left on the default model deliberately; change it once you've seen
-# your own numbers in the log.
-VISION_MODEL = os.environ.get("TANGENT_VISION_MODEL", MODEL)
+# a handful of downscaled frames and names the task. It runs many times an hour,
+# which makes it the biggest cost lever in the app — and every line it produces
+# is confirmed by the user before it counts, so a cheaper model's mistakes are
+# caught by design rather than shipped. Raise to claude-sonnet-5 if the
+# proposals need too much correcting.
+VISION_MODEL = os.environ.get("TANGENT_VISION_MODEL", "claude-haiku-4-5")
 # Extraction calls per user per day. At one call per ~5 minutes of recording,
 # 60 covers a five-hour day.
 DAILY_CAPTURE_CAP = int(os.environ.get("TANGENT_DAILY_CAPTURE_CAP", "60"))

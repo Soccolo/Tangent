@@ -207,6 +207,22 @@ LESSON_SCHEMA = {
 # --------------------------------------------------------------------------- #
 
 
+# `effort` is not universally accepted: the small/older models reject it
+# outright rather than ignoring it, so it has to be omitted per model. A
+# blacklist rather than a whitelist, so a future model doesn't silently lose
+# the parameter.
+_NO_EFFORT_PREFIXES = (
+    "claude-haiku",
+    "claude-sonnet-4-5",
+    "claude-3",
+    "claude-2",
+)
+
+
+def _supports_effort(model: str) -> bool:
+    return not model.startswith(_NO_EFFORT_PREFIXES)
+
+
 def _is_unsupported_fallbacks(exc: Exception) -> bool:
     """Distinguish 'this SDK/account doesn't have the fallbacks beta' from every
     other TypeError — notably the auth one, which must not silently disable it."""
@@ -231,6 +247,7 @@ def _generate(
     max_tokens: int = 16000,
     images: list[tuple[str, str]] | None = None,
     model: str | None = None,
+    use_fallbacks: bool = True,
 ) -> dict:
     global _use_fallbacks
 
@@ -244,16 +261,21 @@ def _generate(
         )
     content.append({"type": "text", "text": prompt})
 
+    target = model or MODEL
+    output_config: dict = {"format": {"type": "json_schema", "schema": schema}}
+    if _supports_effort(target):
+        output_config["effort"] = EFFORT
+
     params = dict(
-        model=model or MODEL,
+        model=target,
         max_tokens=max_tokens,
         system=system,
-        output_config={"effort": EFFORT, "format": {"type": "json_schema", "schema": schema}},
+        output_config=output_config,
         messages=[{"role": "user", "content": content}],
     )
 
     try:
-        if _use_fallbacks:
+        if _use_fallbacks and use_fallbacks:
             try:
                 with _stream(params, True) as stream:
                     message = stream.get_final_message()
@@ -499,6 +521,10 @@ def extract_activities(role: str, frames: list[tuple[str, str]]) -> list[dict]:
         max_tokens=2000,
         images=frames,
         model=VISION_MODEL,
+        # Refusal fallbacks are configured per model; the small extraction model
+        # isn't a valid fallback source, and a refusal here just means "return
+        # nothing", which is already the desired behaviour.
+        use_fallbacks=False,
     )
     return result.get("observations", [])
 

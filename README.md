@@ -94,11 +94,19 @@ Images are the expensive input. Defaults are tuned for it: a 20s sample interval
 six frames per five-minute call. **An idle screen costs nothing** — verified: an
 unchanged screen increments the skip counter and sends no frame.
 
-`TANGENT_VISION_MODEL` is the biggest lever in the app. It defaults to the main model,
-which is *not* the cheap choice: extraction is a "name the task" job that far smaller
-models do well, and it runs many times an hour. Watch the `generation ok … in=… out=…`
-log lines for a real session before deciding — dropping this to a smaller model is the
-single highest-value change if capture becomes your main way of logging.
+`TANGENT_VISION_MODEL` defaults to **`claude-haiku-4-5`**, not the lesson model.
+Extraction is a "name the task from a screenshot" job, it runs many times an hour, and
+**every line it produces is confirmed by you before it counts** — so a cheaper model's
+mistakes are caught by design rather than shipped. Roughly a fifth of Opus's per-token
+price on both input and output.
+
+Raise it to `claude-sonnet-5` if the proposals need too much correcting. That's the
+signal to watch: not whether the guesses are perfect, but whether fixing them is more
+work than typing the line yourself.
+
+> **Model note:** `effort` is not accepted by every model — Haiku 4.5 and Sonnet 4.5
+> reject it outright rather than ignoring it. `_supports_effort()` in `app/llm.py`
+> omits it per model, so switching `TANGENT_VISION_MODEL` between tiers is safe.
 
 `TANGENT_DAILY_CAPTURE_CAP` (default 60) bounds extraction calls per user per day —
 roughly five hours of continuous recording.

@@ -42,10 +42,12 @@ services:
         value: "4"
       - key: TANGENT_GLOBAL_DAILY_CAP
         value: "300"
-      # Screen capture. The vision model runs many times an hour, so it is the
-      # biggest cost lever in the app — set it from the token counts in the log.
+      # Screen capture. Extraction runs many times an hour, so it uses a small
+      # model: naming a task from a screenshot doesn't need a frontier model,
+      # and every line is user-confirmed before it counts. Raise to
+      # claude-sonnet-5 if the proposals need too much correcting.
       - key: TANGENT_VISION_MODEL
-        value: claude-opus-5
+        value: claude-haiku-4-5
       - key: TANGENT_DAILY_CAPTURE_CAP
         value: "60"
 
