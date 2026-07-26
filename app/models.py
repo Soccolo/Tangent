@@ -199,6 +199,9 @@ class Lesson(Base):
     )
     # What the learner said they already knew, 1-10, at the moment they picked.
     level: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # When generation started, so a run killed by a restart or a sleeping
+    # instance can be spotted and retried instead of hanging on "generating".
+    generating_since: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     # Their answers to the two diagnostic questions, if they took them.
     placement_json: Mapped[str | None] = mapped_column(Text, nullable=True)
 

@@ -59,6 +59,24 @@ EFFORT = os.environ.get("TANGENT_EFFORT", "high")
 # caught by design rather than shipped. Raise to claude-sonnet-5 if the
 # proposals need too much correcting.
 VISION_MODEL = os.environ.get("TANGENT_VISION_MODEL", "claude-haiku-4-5")
+
+# Lesson generation, per knowledge band. Latency is dominated by output size and
+# thinking depth, and a beginner's lesson needs neither: it is foundational
+# material where a faster model does the job well. Depth is worth waiting for
+# only where the reader is already close to a practitioner.
+LESSON_MODELS = {
+    "new": os.environ.get("TANGENT_MODEL_NEW", "claude-sonnet-5"),
+    "working": os.environ.get("TANGENT_MODEL_WORKING", "claude-sonnet-5"),
+    "deep": os.environ.get("TANGENT_MODEL_DEEP", MODEL),
+}
+LESSON_EFFORT = {
+    "new": os.environ.get("TANGENT_EFFORT_NEW", "low"),
+    "working": os.environ.get("TANGENT_EFFORT_WORKING", "medium"),
+    "deep": os.environ.get("TANGENT_EFFORT_DEEP", "high"),
+}
+# A lesson still "generating" after this long is assumed dead — the free tier
+# sleeps and restarts, which kills in-flight background work with no error.
+STALE_GENERATION_MINUTES = int(os.environ.get("TANGENT_STALE_MINUTES", "12"))
 # Extraction calls per user per day. At one call per ~5 minutes of recording,
 # 60 covers a five-hour day.
 DAILY_CAPTURE_CAP = int(os.environ.get("TANGENT_DAILY_CAPTURE_CAP", "60"))

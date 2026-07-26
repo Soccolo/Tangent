@@ -20,7 +20,7 @@ import re
 
 import anthropic
 
-from .config import EFFORT, MODEL, VISION_MODEL
+from .config import EFFORT, LESSON_EFFORT, LESSON_MODELS, MODEL, VISION_MODEL
 
 log = logging.getLogger("tangent.llm")
 
@@ -249,6 +249,7 @@ def _generate(
     images: list[tuple[str, str]] | None = None,
     model: str | None = None,
     use_fallbacks: bool = True,
+    effort: str | None = None,
 ) -> dict:
     global _use_fallbacks
 
@@ -265,7 +266,7 @@ def _generate(
     target = model or MODEL
     output_config: dict = {"format": {"type": "json_schema", "schema": schema}}
     if _supports_effort(target):
-        output_config["effort"] = EFFORT
+        output_config["effort"] = effort or EFFORT
 
     params = dict(
         model=target,
@@ -439,12 +440,31 @@ def generate_lesson(
             lines.append(
                 f"- {item.get('probes') or item.get('prompt', '')} — answered {verdict}"
             )
+    # A beginner's lesson is foundational, not exhaustive — fewer, longer cards
+    # teach better here and cut generation time, which is dominated by output
+    # size and by the SVG diagrams in particular.
+    band = "new" if (level or 5) <= 3 else "deep" if (level or 5) >= 8 else "working"
+    if band == "new":
+        lines.append(
+            "Keep this to 5 or 6 cards with a diagram on two or three of them: at "
+            "this level, depth of explanation beats breadth of coverage."
+        )
     lines += ["", "Write the lesson."]
     prompt = "\n".join(lines)
     # Headroom matters here: max_tokens caps thinking *and* output, and a lesson
     # with a diagram on most of 8 cards is genuinely large. Too tight and it
     # truncates mid-lesson rather than degrading gracefully.
-    lesson = _generate(LESSON_SYSTEM, prompt, LESSON_SCHEMA, max_tokens=32000)
+    model = LESSON_MODELS.get(band, MODEL)
+    effort = LESSON_EFFORT.get(band, EFFORT)
+    log.info("generating %r at level %s (band=%s, %s/%s)", topic.get("title"), level, band, model, effort)
+    lesson = _generate(
+        LESSON_SYSTEM,
+        prompt,
+        LESSON_SCHEMA,
+        max_tokens=32000,
+        model=model,
+        effort=effort,
+    )
     shuffle_options(lesson)   # the prompt asks; this guarantees
     for card in lesson.get("cards", []):
         card["diagram_svg"] = sanitize_svg(card.get("diagram_svg", ""))

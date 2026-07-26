@@ -2,7 +2,7 @@ import json
 import logging
 import random
 import secrets
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from sqlalchemy import func, select
@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session as OrmSession
 from ..config import (
     DAILY_CAPTURE_CAP,
     LIBRARY_REUSE,
+    STALE_GENERATION_MINUTES,
     DAILY_DIGEST_CAP,
     DAILY_LESSON_CAP,
     GLOBAL_DAILY_CAP,
@@ -395,6 +396,7 @@ def _generate_lesson_job(
         except Exception as exc:  # noqa: BLE001 - the status field is the report
             log.exception("Lesson %s generation failed", lesson_id)
             lesson.status = "failed"
+            lesson.generating_since = None
             lesson.error = str(exc) if isinstance(exc, LLMError) else (
                 "Something went wrong writing this lesson."
             )
@@ -403,6 +405,7 @@ def _generate_lesson_job(
         lesson.content_json = json.dumps(content)
         lesson.total_questions = len(content.get("questions", []))
         lesson.status = "ready"
+        lesson.generating_since = None
         lesson.error = ""
 
         # Contribute it so the next person asking this doesn't pay for it again.
@@ -455,7 +458,32 @@ def get_lesson(
         }
 
     if lesson.status == "generating":
-        return {"id": lesson.id, "status": "generating", "picked_by": lesson.picked_by}
+        # A sleeping or restarted instance kills the background task silently,
+        # leaving the row stuck on "generating" with nothing coming. Time it out
+        # so the user gets a retry instead of an eternal spinner.
+        started = lesson.generating_since or lesson.created_at
+        age = datetime.utcnow() - started
+        if age > timedelta(minutes=STALE_GENERATION_MINUTES):
+            log.warning("Lesson %s stuck generating for %s — marking failed", lesson.id, age)
+            # Straight back to "pending", not "failed": the next call should
+            # start a fresh generation, so the user's retry works on one click.
+            lesson.status = "pending"
+            lesson.generating_since = None
+            db.commit()
+            return {
+                "id": lesson.id,
+                "status": "failed",
+                "error": (
+                    "That took too long and stalled — the server may have restarted. "
+                    "Try again."
+                ),
+            }
+        return {
+            "id": lesson.id,
+            "status": "generating",
+            "picked_by": lesson.picked_by,
+            "elapsed_seconds": int(age.total_seconds()),
+        }
 
     if lesson.status == "failed":
         # Let them retry — but a retry costs quota like any other generation.
@@ -496,6 +524,7 @@ def get_lesson(
 
     claim_quota(db, user.id, "lesson")
     lesson.status = "generating"
+    lesson.generating_since = datetime.utcnow()
     db.commit()
 
     placement = json.loads(lesson.placement_json) if lesson.placement_json else None

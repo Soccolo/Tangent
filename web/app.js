@@ -894,9 +894,13 @@ function waitForLesson(id) {
         <h2 style="margin-top:10px">Writing your lesson</h2>
         <p class="muted" id="writingLine">${esc(WRITING_LINES[line])}</p>
         <div class="progress" style="margin-top:18px"><i style="width:${Math.min(90, 12 + line * 18)}%"></i></div>
-        <p class="tiny muted" style="margin-top:14px">Usually 30–60 seconds. It's writing
-          this one from scratch, for you.</p>
-        <button class="btn ghost small" id="cancelWait" style="margin-top:14px">Back</button>
+        <p class="tiny muted" style="margin-top:14px">Written from scratch, for you.
+          A minute or two is normal for a deep one.</p>
+        <p class="tiny muted" id="writingClock">0s so far</p>
+        <button class="btn ghost small" id="cancelWait" style="margin-top:14px">
+          Leave it running</button>
+        <p class="tiny muted" style="margin-top:8px">It keeps writing if you leave —
+          it'll be waiting on your Today screen.</p>
       </div>`;
     document.getElementById("cancelWait").onclick = () => { stop = true; exitLesson(); };
   };
@@ -907,11 +911,22 @@ function waitForLesson(id) {
     line = (line + 1) % WRITING_LINES.length;
     const el = document.getElementById("writingLine");
     if (el) el.textContent = WRITING_LINES[line];
-  }, 6000);
+    const clock = document.getElementById("writingClock");
+    if (clock) {
+      const secs = Math.round((Date.now() - startedAt) / 1000);
+      clock.textContent = secs < 90 ? `${secs}s so far` : `${Math.floor(secs / 60)}m ${secs % 60}s so far`;
+    }
+  }, 1000);
+
+  const startedAt = Date.now();
 
   (async () => {
-    for (let attempt = 0; attempt < 60 && !stop; attempt++) {
-      await new Promise((r) => setTimeout(r, 2500));
+    // Poll until the server itself gives up (it times a stalled generation out
+    // and returns "failed"). Backing off keeps a long wait cheap. Crucially we
+    // never bail out on our own and dump the user on the home screen — the
+    // lesson is still coming, and losing their place is worse than waiting.
+    for (let attempt = 0; !stop; attempt++) {
+      await new Promise((r) => setTimeout(r, attempt < 24 ? 2500 : 5000));
       if (stop) break;
       let res;
       try { res = await api(`/api/lessons/${id}`); }
@@ -932,10 +947,6 @@ function waitForLesson(id) {
       }
     }
     clearInterval(ticker);
-    if (!stop) {
-      toast("Still working — check back in a moment.");
-      exitLesson();
-    }
   })();
 }
 
