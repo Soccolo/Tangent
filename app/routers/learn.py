@@ -8,7 +8,12 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session as OrmSession
 
-from ..config import DAILY_DIGEST_CAP, DAILY_LESSON_CAP, GLOBAL_DAILY_CAP
+from ..config import (
+    DAILY_CAPTURE_CAP,
+    DAILY_DIGEST_CAP,
+    DAILY_LESSON_CAP,
+    GLOBAL_DAILY_CAP,
+)
 from ..db import SessionLocal, get_db
 from ..llm import LLMError, generate_lesson, suggest_topics
 from ..models import Activity, Digest, Generation, Lesson, User, utcnow
@@ -41,9 +46,17 @@ def claim_quota(db: OrmSession, user_id: int, kind: str) -> None:
     Recorded *before* the Claude call, not after — a crash mid-generation should
     still cost quota, or a failing prompt becomes an unbounded retry loop.
     """
-    per_user_cap = DAILY_LESSON_CAP if kind == "lesson" else DAILY_DIGEST_CAP
+    per_user_cap = {
+        "lesson": DAILY_LESSON_CAP,
+        "digest": DAILY_DIGEST_CAP,
+        "capture": DAILY_CAPTURE_CAP,
+    }[kind]
     if used_today(db, user_id, kind) >= per_user_cap:
-        noun = "lessons" if kind == "lesson" else "topic refreshes"
+        noun = {
+            "lesson": "lessons",
+            "digest": "topic refreshes",
+            "capture": "recording time",
+        }[kind]
         raise HTTPException(
             status.HTTP_429_TOO_MANY_REQUESTS,
             f"You've used today's {noun} ({per_user_cap}). Come back tomorrow — "

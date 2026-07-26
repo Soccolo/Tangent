@@ -69,6 +69,25 @@ class Activity(Base):
     user: Mapped[User] = relationship(back_populates="activities")
 
 
+class Observation(Base):
+    """Something the capture loop thinks you were doing, awaiting your yes/no.
+
+    Only the derived text lives here. Frames are never written to disk or to
+    this table — they exist in browser memory, go to the model, and are dropped.
+    """
+
+    __tablename__ = "observations"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    day: Mapped[date] = mapped_column(Date, index=True)
+    activity: Mapped[str] = mapped_column(Text)          # the proposed log line
+    evidence: Mapped[str] = mapped_column(Text, default="")  # why it thinks so
+    confidence: Mapped[str] = mapped_column(String(16), default="medium")
+    status: Mapped[str] = mapped_column(String(16), default="pending")  # pending|confirmed|rejected
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
 class Digest(Base):
     """The end-of-day suggestion set for one user on one day."""
 

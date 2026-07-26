@@ -9,6 +9,7 @@ const state = {
   digest: null,
   activities: [],
   saved: [],         // shared lessons added from someone else's link
+  observations: [],  // capture proposals awaiting a yes/no
   shared: null,      // { token, ... } when viewing /s/<token>
   lesson: null,      // { id, content, pickedBy }
   step: 0,           // index into cards + questions
@@ -216,19 +217,204 @@ function renderAuth() {
   };
 }
 
+/* --- screen capture --- */
+
+const CONFIDENCE_LABEL = { low: "not sure", medium: "fairly sure", high: "confident" };
+
+function captureCardHtml() {
+  const running = window.TangentCapture && TangentCapture.isRunning();
+  const supported = window.TangentCapture && TangentCapture.isSupported();
+
+  if (!supported) {
+    return `<div class="wip" style="cursor:default">
+      <span class="dot"></span>
+      <span class="label"><b>Record while you work</b>
+        <span>Needs Chrome, Edge or Firefox on a desktop</span></span>
+    </div>`;
+  }
+
+  if (running) {
+    return `
+      <div class="capture live">
+        <div class="row">
+          <span class="rec"></span>
+          <div style="flex:1">
+            <b>Watching your screen</b>
+            <div class="tiny muted" id="captureStats">Taking a look every 20 seconds…</div>
+          </div>
+          <button class="btn small" id="stopCapture">Stop</button>
+        </div>
+        <p class="tiny muted" style="margin-top:10px">
+          Nothing is recorded. Frames are checked, turned into notes, and dropped —
+          you confirm each note before it reaches your log.
+        </p>
+      </div>`;
+  }
+
+  return `
+    <button class="capture" id="startCapture">
+      <span class="dot"></span>
+      <span class="label">
+        <b>Record while you work</b>
+        <span>Tangent watches, writes your log, and asks you to confirm it</span>
+      </span>
+      <span class="badge-go">Start</span>
+    </button>`;
+}
+
+function observationsHtml() {
+  const items = state.observations || [];
+  if (!items.length) return "";
+  return `
+    <div class="card">
+      <h2>Did I get this right?</h2>
+      <p class="muted small">From what was on your screen. Nothing here is in your
+        log yet — keep what's right, bin the rest.</p>
+      <div class="stack" style="margin-top:14px">
+        ${items.map((o) => `
+          <div class="observation" data-obs="${o.id}">
+            <div class="row" style="align-items:flex-start">
+              <div style="flex:1">
+                <input type="text" class="obs-text" value="${esc(o.activity)}"
+                  aria-label="Proposed activity">
+                <div class="tiny muted" style="margin-top:6px">
+                  <span class="tag">${esc(CONFIDENCE_LABEL[o.confidence] || o.confidence)}</span>
+                  ${esc(o.evidence)}
+                </div>
+              </div>
+            </div>
+            <div class="row" style="margin-top:10px">
+              <button class="btn small" data-confirm="${o.id}">Yes, log it</button>
+              <button class="btn small ghost" data-reject="${o.id}">No</button>
+            </div>
+          </div>`).join("")}
+      </div>
+      <button class="btn ghost small wide" id="clearObs" style="margin-top:12px">
+        Discard all of these</button>
+    </div>`;
+}
+
+function repaintCapture() {
+  const slot = document.getElementById("captureSlot");
+  const obs = document.getElementById("observeSlot");
+  if (!slot || !obs) return;
+  slot.innerHTML = captureCardHtml();
+  obs.innerHTML = observationsHtml();
+  wireCapture();
+}
+
+function wireCapture() {
+  const start = document.getElementById("startCapture");
+  if (start) start.onclick = startCapture;
+
+  const stopBtn = document.getElementById("stopCapture");
+  if (stopBtn) stopBtn.onclick = async () => {
+    busy(stopBtn, true, "Finishing…");
+    await TangentCapture.stop();
+    await refreshObservations();
+    repaintCapture();
+  };
+
+  document.querySelectorAll("[data-confirm]").forEach((b) => {
+    b.onclick = async () => {
+      const row = b.closest(".observation");
+      const text = row.querySelector(".obs-text").value.trim();
+      busy(b, true, "Saving…");
+      try {
+        await api(`/api/capture/observations/${b.dataset.confirm}/confirm`, {
+          method: "POST", body: { activity: text },
+        });
+        state.observations = state.observations.filter((o) => String(o.id) !== b.dataset.confirm);
+        state.activities = await api("/api/activities");
+        renderToday();
+      } catch (err) { busy(b, false); toast(err.message); }
+    };
+  });
+
+  document.querySelectorAll("[data-reject]").forEach((b) => {
+    b.onclick = async () => {
+      try {
+        await api(`/api/capture/observations/${b.dataset.reject}/reject`, { method: "POST" });
+        state.observations = state.observations.filter((o) => String(o.id) !== b.dataset.reject);
+        repaintCapture();
+      } catch (err) { toast(err.message); }
+    };
+  });
+
+  const clear = document.getElementById("clearObs");
+  if (clear) clear.onclick = async () => {
+    try {
+      await api("/api/capture/observations", { method: "DELETE" });
+      state.observations = [];
+      repaintCapture();
+    } catch (err) { toast(err.message); }
+  };
+}
+
+async function refreshObservations() {
+  try {
+    const data = await api("/api/capture/pending");
+    state.observations = data.observations || [];
+  } catch { /* not signed in, or offline */ }
+}
+
+async function startCapture() {
+  try {
+    await TangentCapture.start();
+  } catch (err) {
+    // Denying the browser prompt lands here — not an error worth shouting about.
+    if (err && (err.name === "NotAllowedError" || /denied|permission/i.test(err.message))) {
+      toast("No problem — you can always log the day by hand.");
+    } else {
+      toast(err.message || "Couldn't start screen sharing.");
+    }
+    return;
+  }
+  repaintCapture();
+  toast("Watching. Stop any time — from here or your browser's sharing bar.");
+}
+
+if (window.TangentCapture) {
+  TangentCapture.on("observations", (items) => {
+    state.observations = (state.observations || []).concat(items);
+    if (state.tab === "today" && !state.lesson && !state.shared) repaintCapture();
+    toast(`${items.length} new ${items.length === 1 ? "note" : "notes"} to check`);
+  });
+
+  TangentCapture.on("stats", (s) => {
+    const el = document.getElementById("captureStats");
+    if (!el) return;
+    const mins = Math.max(1, Math.round((Date.now() - s.startedAt) / 60000));
+    el.textContent =
+      `${mins} min · ${s.kept} frame${s.kept === 1 ? "" : "s"} kept · ` +
+      `${s.skipped} skipped as unchanged`;
+  });
+
+  TangentCapture.on("stopped", (s) => {
+    if (s.fromBrowser) {
+      refreshObservations().then(repaintCapture);
+      toast("Stopped sharing — that's the recording ended.");
+    }
+  });
+
+  TangentCapture.on("error", (message) => toast(message));
+}
+
 /* --- today --- */
 
 async function loadToday() {
-  const [user, activities, digest, saved] = await Promise.all([
+  const [user, activities, digest, saved, pending] = await Promise.all([
     api("/api/auth/me"),   // refreshes the remaining-quota counter too
     api("/api/activities"),
     api("/api/digest/today"),
     api("/api/saved-lessons"),
+    api("/api/capture/pending"),
   ]);
   state.user = user;
   state.activities = activities;
   state.digest = digest.exists ? digest : null;
   state.saved = saved;
+  state.observations = pending.observations || [];
 }
 
 function categoryLabel(c) {
@@ -259,15 +445,10 @@ function renderToday() {
           : `<p class="muted small">Nothing logged today yet.</p>`}
       </div>
 
-      <button class="wip" id="recordBtn" aria-disabled="true">
-        <span class="dot"></span>
-        <span class="label">
-          <b>Record while you work</b>
-          <span>Capture your screen and let Tangent log the day for you</span>
-        </span>
-        <span class="badge-wip">Coming soon</span>
-      </button>
+      <div id="captureSlot">${captureCardHtml()}</div>
     </div>
+
+    <div id="observeSlot">${observationsHtml()}</div>
 
     ${state.saved.length ? `
       <div class="card">
@@ -321,8 +502,7 @@ function renderToday() {
     };
   });
 
-  document.getElementById("recordBtn").onclick = () =>
-    toast("Screen recording isn't built yet — it's where automatic logging is headed.");
+  wireCapture();
 
   const build = document.getElementById("buildDigest");
   if (build) build.onclick = () => buildDigest(build, false);

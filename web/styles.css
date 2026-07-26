@@ -545,3 +545,58 @@ header.top .home:active { transform: translateY(1px); }
   background: var(--brand-fill); color: var(--brand-pale);
   font-size: 10.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
 }
+
+/* ------------------------------------------------ screen capture -- */
+
+.capture {
+  display: flex; align-items: center; gap: 12px;
+  margin-top: 14px; padding: 13px 14px; width: 100%;
+  border-radius: var(--radius-sm);
+  border: 1px dashed var(--border);
+  background: transparent; color: var(--muted);
+  text-align: left; cursor: pointer;
+  transition: border-color .15s ease, background .15s ease;
+}
+.capture:hover { border-color: var(--brand); background: rgba(145, 132, 217, .06); }
+.capture .dot {
+  width: 9px; height: 9px; border-radius: 50%; flex: none;
+  background: var(--flame); box-shadow: 0 0 10px var(--flame);
+}
+.capture .label { flex: 1; }
+.capture .label b { display: block; color: var(--text); font-weight: 600; font-size: 14.5px; }
+.capture .label span { font-size: 12.5px; }
+
+.capture.live {
+  display: block; cursor: default;
+  border-style: solid; border-color: var(--brand);
+  background: var(--brand-soft);
+}
+.capture.live b { color: var(--text); }
+
+.badge-go {
+  flex: none; padding: 4px 11px; border-radius: 999px;
+  background: var(--brand-fill); color: var(--brand-pale);
+  font-size: 11px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase;
+}
+
+/* The recording dot: unmistakable, and the only thing on screen that pulses red. */
+.rec {
+  width: 11px; height: 11px; border-radius: 50%; flex: none;
+  background: #ff6b6b; box-shadow: 0 0 0 0 rgba(255, 107, 107, .7);
+  animation: recPulse 1.8s ease-out infinite;
+}
+@keyframes recPulse {
+  0%   { box-shadow: 0 0 0 0 rgba(255, 107, 107, .65); }
+  70%  { box-shadow: 0 0 0 11px rgba(255, 107, 107, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(255, 107, 107, 0); }
+}
+
+.observation {
+  padding: 13px; border-radius: var(--radius-sm);
+  background: var(--surface-2); border: 1px solid var(--border-soft);
+  animation: rise .3s ease both;
+}
+.observation .obs-text {
+  background: var(--bg); border-color: var(--border);
+  font-size: 14.5px; padding: 9px 11px;
+}

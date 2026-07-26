@@ -19,7 +19,7 @@ import re
 
 import anthropic
 
-from .config import EFFORT, MODEL
+from .config import EFFORT, MODEL, VISION_MODEL
 
 log = logging.getLogger("tangent.llm")
 
@@ -224,15 +224,32 @@ def _stream(params: dict, with_fallbacks: bool):
     return client().messages.stream(**params)
 
 
-def _generate(system: str, prompt: str, schema: dict, max_tokens: int = 16000) -> dict:
+def _generate(
+    system: str,
+    prompt: str,
+    schema: dict,
+    max_tokens: int = 16000,
+    images: list[tuple[str, str]] | None = None,
+    model: str | None = None,
+) -> dict:
     global _use_fallbacks
 
+    content: list[dict] = []
+    for media_type, data in images or []:
+        content.append(
+            {
+                "type": "image",
+                "source": {"type": "base64", "media_type": media_type, "data": data},
+            }
+        )
+    content.append({"type": "text", "text": prompt})
+
     params = dict(
-        model=MODEL,
+        model=model or MODEL,
         max_tokens=max_tokens,
         system=system,
         output_config={"effort": EFFORT, "format": {"type": "json_schema", "schema": schema}},
-        messages=[{"role": "user", "content": prompt}],
+        messages=[{"role": "user", "content": content}],
     )
 
     try:
@@ -385,6 +402,105 @@ def generate_lesson(role: str, topic: dict, day_summary: str = "") -> dict:
         if not card["diagram_svg"]:
             card["diagram_caption"] = ""
     return lesson
+
+
+# --------------------------------------------------------------------------- #
+# Screen-capture extraction
+# --------------------------------------------------------------------------- #
+
+OBSERVE_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["observations"],
+    "properties": {
+        "observations": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["activity", "evidence", "confidence"],
+                "properties": {
+                    "activity": {
+                        "type": "string",
+                        "description": (
+                            "One line for the work log, in the user's voice: "
+                            "'Priced a solicitors' PI claim', 'Read the Polars "
+                            "docs on lazy frames'. Task and subject only."
+                        ),
+                    },
+                    "evidence": {
+                        "type": "string",
+                        "description": (
+                            "What on screen suggested it, described generically — "
+                            "'a spreadsheet of claim development factors', 'library "
+                            "documentation in a browser'. Never quote screen content."
+                        ),
+                    },
+                    "confidence": {
+                        "type": "string",
+                        "enum": ["low", "medium", "high"],
+                    },
+                },
+            },
+        }
+    },
+}
+
+OBSERVE_SYSTEM = """You are watching a few screenshots from someone's working \
+session to write their work log for them. You name the *kind of work*, nothing else.
+
+You are looking at a real person's actual screen, which will contain other people's \
+personal information — client and claimant names, case and policy numbers, medical \
+details, financial figures, email addresses, message contents. None of that belongs \
+in a work log.
+
+Absolute rules:
+- Never reproduce, quote, paraphrase or allude to any name, identifier, number, \
+address, email, or medical or financial detail visible on screen. Not in `activity`, \
+not in `evidence`, not anywhere.
+- Write at the level of the task and its subject matter: "priced a professional \
+indemnity claim", not "priced the claim for [name]". "Reviewed a reinsurance treaty", \
+not "reviewed the [company] treaty". Naming a public library, product, standard or \
+public company is fine — naming a private individual or a client is not.
+- If a frame shows something personal and nothing about the task, return no \
+observation for it. Silence is always the safe output.
+
+What makes a good observation:
+- Merge frames that show one continuous task into a single observation. Three frames \
+of the same spreadsheet is one line, not three.
+- Prefer few, specific, high-quality lines over many vague ones. Two is usually right \
+for a five-minute window; more than four almost never is.
+- Skip anything that isn't work: personal browsing, email triage, chat, this app \
+itself, a screensaver, an empty desktop.
+- Be honest with `confidence`. "low" is the correct answer for a glimpse of an \
+unfamiliar tool. The user is asked to confirm each line, and a wrong guess with high \
+confidence costs them more than an honest low one.
+- If nothing work-related is visible, return an empty list. That is a normal and \
+frequent outcome — never invent activity to fill the space."""
+
+
+def extract_activities(role: str, frames: list[tuple[str, str]]) -> list[dict]:
+    """Turn a handful of screen frames into candidate log lines.
+
+    `frames` are (media_type, base64) pairs held in memory only — nothing is
+    written to disk here or by the caller.
+    """
+    if not frames:
+        return []
+    prompt = (
+        f"This person describes their work as: {role or 'not specified'}\n\n"
+        f"Here are {len(frames)} screenshots taken a few minutes apart during one "
+        "working session, in order. What were they working on?"
+    )
+    result = _generate(
+        OBSERVE_SYSTEM,
+        prompt,
+        OBSERVE_SCHEMA,
+        max_tokens=2000,
+        images=frames,
+        model=VISION_MODEL,
+    )
+    return result.get("observations", [])
 
 
 # --------------------------------------------------------------------------- #

@@ -8,7 +8,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .config import WEB_DIR
 from .db import Base, engine, ensure_schema
-from .routers import auth, learn
+from .routers import auth, capture, learn
 
 logging.basicConfig(level=logging.INFO)
 
@@ -19,6 +19,7 @@ ensure_schema()  # additive column migration for already-deployed databases
 
 app.include_router(auth.router)
 app.include_router(learn.router)
+app.include_router(capture.router)
 
 app.mount("/static", StaticFiles(directory=WEB_DIR), name="static")
 

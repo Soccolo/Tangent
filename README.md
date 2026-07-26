@@ -44,6 +44,65 @@ spending anything. The account's password is `demodemo` if it didn't already exi
 Tangent's own pick is left ungenerated on purpose: opening it is what exercises the
 real Claude path once a key is in place.
 
+## Screen capture
+
+Press **Record while you work** and Tangent watches your screen, writes your log for
+you, and asks you to confirm each line before it counts.
+
+**No video is ever recorded.** The display stream is sampled into a canvas every 20
+seconds; each frame is downscaled to 1024px, compared against the last kept one, and
+dropped if the screen hasn't meaningfully changed. Kept frames are batched (max 6) and
+sent for extraction every five minutes, then discarded — before the network call
+returns, so they're never resent. Nothing is written to disk, nothing is stored
+server-side, and closing the tab loses everything in flight. There is no video file to
+delete because one is never created.
+
+**Nothing reaches your log without your yes.** Extraction produces *proposals*, shown
+with the model's confidence and what it thought it saw. Each is an editable text box:
+correct it, accept it, or bin it. "Discard all of these" throws away everything
+outstanding.
+
+### What this sends to Anthropic, and what to think about first
+
+Frames of your screen go to the Claude API. On a working machine those frames contain
+**other people's personal data** — claimant names, case numbers, medical and financial
+detail — belonging to people who never agreed to it. That's a real consideration under
+UK GDPR, and it doesn't go away because the output is only a one-line summary.
+
+What the app does about it:
+
+- The extraction prompt forbids reproducing any name, identifier, number, address or
+  medical or financial detail, and tells the model to return nothing at all rather than
+  describe something personal. **This is a mitigation, not a guarantee** — it's an
+  instruction to a model, not an enforced filter.
+- Only derived text is stored. Frames are never persisted anywhere.
+- You confirm every line, so nothing sensitive enters the log without you seeing it.
+
+What you should do:
+
+- **Share one window, not your whole screen.** The browser's picker lets you choose;
+  sharing just the tool you're working in dramatically narrows what's captured.
+- **Don't record while client-identifying material is on screen.** Stop is one click,
+  and the browser's own sharing bar stops it too.
+- If this is ever more than personal use, that's a DPIA conversation and an Anthropic
+  Zero Data Retention discussion before anyone else's screen is involved.
+
+### Cost
+
+Images are the expensive input. Defaults are tuned for it: a 20s sample interval, a
+1024px downscale, change-detection that skips an unchanged screen entirely, and at most
+six frames per five-minute call. **An idle screen costs nothing** — verified: an
+unchanged screen increments the skip counter and sends no frame.
+
+`TANGENT_VISION_MODEL` is the biggest lever in the app. It defaults to the main model,
+which is *not* the cheap choice: extraction is a "name the task" job that far smaller
+models do well, and it runs many times an hour. Watch the `generation ok … in=… out=…`
+log lines for a real session before deciding — dropping this to a smaller model is the
+single highest-value change if capture becomes your main way of logging.
+
+`TANGENT_DAILY_CAPTURE_CAP` (default 60) bounds extraction calls per user per day —
+roughly five hours of continuous recording.
+
 ## Sharing
 
 Any finished lesson can be shared from the finish screen or the Progress list. That
