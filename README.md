@@ -198,6 +198,30 @@ the boot. Move to Alembic before the data is worth real care.
 **Lessons are generated on first open, not when you pick a topic.** The digest screen
 stays instant and you only pay for lessons somebody actually starts.
 
+### Speed, and which model writes what
+
+Latency is dominated by output size and thinking depth, so both are set per
+knowledge band rather than globally:
+
+| Band | Model | Effort | Lesson |
+| --- | --- | --- | --- |
+| 1–3 (new) | `claude-sonnet-5` | low | 5–6 cards, 2–3 diagrams |
+| 4–7 (working) | `claude-sonnet-5` | medium | 6–8 cards |
+| 8–10 (deep) | `claude-opus-5` | high | 6–8 cards |
+
+A beginner's lesson is foundational material where a faster model does the job well;
+depth is worth waiting for only where the reader is already close to a practitioner.
+Override any cell with `TANGENT_MODEL_NEW` / `_WORKING` / `_DEEP` and
+`TANGENT_EFFORT_NEW` / `_WORKING` / `_DEEP`.
+
+**Generation survives you leaving.** It runs server-side, so closing the waiting screen
+doesn't cancel it — the lesson appears on Today when it's done. The client polls with
+backoff and never gives up on its own; only the server decides a run has stalled, after
+`TANGENT_STALE_MINUTES` (default 12), at which point the lesson is retryable in one
+click. That timeout exists because a sleeping or restarting free-tier instance kills
+in-flight background work silently, which would otherwise strand a lesson on
+"generating" forever.
+
 ### Cost
 
 **Measure, don't estimate.** Every generation logs its real token usage:
