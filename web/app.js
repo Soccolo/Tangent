@@ -142,6 +142,7 @@ function render() {
   if (!state.user) return renderAuth();
   tabs.classList.remove("hidden");
   if (state.lesson) return renderLesson();
+  if (state.tab === "library") return renderLibrary();
   if (state.tab === "progress") return renderProgress();
   if (state.tab === "profile") return renderProfile();
   return renderToday();
@@ -177,6 +178,8 @@ function renderAuth() {
         </div>
         <button class="btn wide" type="submit" id="authSubmit">Sign in</button>
       </form>
+      <button class="btn ghost small wide" id="forgotLink" style="margin-top:10px">
+        Forgot your password?</button>
     </div>`;
 
   let mode = "signin";
@@ -194,6 +197,7 @@ function renderAuth() {
   };
   document.getElementById("tabSignin").onclick = () => setMode("signin");
   document.getElementById("tabSignup").onclick = () => setMode("signup");
+  document.getElementById("forgotLink").onclick = renderForgot;
 
   document.getElementById("authForm").onsubmit = async (e) => {
     e.preventDefault();
@@ -400,6 +404,84 @@ if (window.TangentCapture) {
   TangentCapture.on("error", (message) => toast(message));
 }
 
+/* --- password reset --- */
+
+function renderForgot() {
+  tabs.classList.add("hidden");
+  view.innerHTML = `
+    <div class="card" style="margin-top:24px">
+      <h2>Reset your password</h2>
+      <p class="muted small">Give us the email you signed up with and we'll send a
+        link. It works once and expires within the hour.</p>
+      <form id="forgotForm" class="stack" style="margin-top:14px">
+        <div class="field"><label for="forgotEmail">Email</label>
+          <input id="forgotEmail" type="email" autocomplete="username" required></div>
+        <button class="btn wide" type="submit" id="forgotSubmit">Send the link</button>
+      </form>
+      <button class="btn ghost small wide" id="backToSignin" style="margin-top:10px">
+        Back to sign in</button>
+    </div>`;
+
+  document.getElementById("backToSignin").onclick = renderAuth;
+  document.getElementById("forgotForm").onsubmit = async (e) => {
+    e.preventDefault();
+    const button = document.getElementById("forgotSubmit");
+    busy(button, true, "Sending…");
+    try {
+      const res = await api("/api/auth/forgot", {
+        method: "POST",
+        body: { email: document.getElementById("forgotEmail").value },
+      });
+      view.innerHTML = `
+        <div class="card center" style="margin-top:24px">
+          <img src="/static/owl.svg" alt="" width="72" height="72">
+          <h2>Check your email</h2>
+          <p class="muted">If that address has an account, a reset link is on its way.</p>
+          ${res.delivery === "log" ? `<p class="tiny muted">Email isn't configured on
+            this server — the link was written to the server log instead.</p>` : ""}
+          <button class="btn" id="backToSignin2">Back to sign in</button>
+        </div>`;
+      document.getElementById("backToSignin2").onclick = renderAuth;
+    } catch (err) { busy(button, false); toast(err.message); }
+  };
+}
+
+function renderReset() {
+  tabs.classList.add("hidden");
+  view.innerHTML = `
+    <div class="card" style="margin-top:24px">
+      <h2>Choose a new password</h2>
+      <form id="resetForm" class="stack" style="margin-top:14px">
+        <div class="field"><label for="newPass">New password</label>
+          <input id="newPass" type="password" autocomplete="new-password"
+            minlength="8" required>
+          <div class="tiny muted" style="margin-top:6px">At least 8 characters.
+            Setting it signs out every other device.</div></div>
+        <button class="btn wide" type="submit" id="resetSubmit">Set password</button>
+      </form>
+    </div>`;
+
+  document.getElementById("resetForm").onsubmit = async (e) => {
+    e.preventDefault();
+    const button = document.getElementById("resetSubmit");
+    busy(button, true, "Saving…");
+    try {
+      state.user = await api("/api/auth/reset", {
+        method: "POST",
+        body: { token: state.resetToken, password: document.getElementById("newPass").value },
+      });
+      state.resetToken = null;
+      history.replaceState({}, "", "/");
+      await loadToday();
+      setTab("today");
+      toast("Password changed — you're signed in.");
+    } catch (err) {
+      busy(button, false);
+      toast(err.message);
+    }
+  };
+}
+
 /* --- today --- */
 
 async function loadToday() {
@@ -593,6 +675,7 @@ const WRITING_LINES = [
 ];
 
 function lessonSourceLabel(lesson) {
+  if (lesson.picked_by === "library") return lesson.author ? `Library · ${lesson.author}` : "From the library";
   if (lesson.picked_by === "shared") return `From ${lesson.author || "someone"}`;
   return lesson.picked_by === "user" ? "Your pick" : "Tangent's pick";
 }
@@ -814,6 +897,67 @@ async function renderFinish() {
   document.getElementById("done").onclick = exitLesson;
   document.getElementById("shareBtn").onclick = (e) =>
     shareLesson(state.lesson.id, e.currentTarget, document.getElementById("shareSlot"));
+}
+
+/* --- library --- */
+
+async function renderLibrary(query) {
+  const q = query === undefined ? (state.libraryQuery || "") : query;
+  state.libraryQuery = q;
+  view.innerHTML = `<div class="card center"><span class="spinner"></span></div>`;
+
+  let data;
+  try { data = await api(`/api/library?q=${encodeURIComponent(q)}`); }
+  catch (err) { view.innerHTML = `<div class="card">${esc(err.message)}</div>`; return; }
+
+  view.innerHTML = `
+    <div class="card">
+      <h2>Library</h2>
+      <p class="muted small">Lessons already written — by you, or by anyone else using
+        Tangent. Adding one is instant and costs nothing to generate.</p>
+      <form id="libSearch" class="row" style="margin-top:14px">
+        <input type="text" id="libQ" placeholder="Search topics…" value="${esc(q)}">
+        <button class="btn" type="submit">Search</button>
+      </form>
+      <p class="tiny muted" style="margin-top:10px">${data.total} lesson${
+        data.total === 1 ? "" : "s"} in the library</p>
+    </div>
+
+    ${data.lessons.length ? `<div class="topics">
+      ${data.lessons.map((l) => `
+        <div class="topic" style="cursor:default">
+          <div class="row wrap" style="gap:6px">
+            ${l.category ? `<span class="tag cat">${esc(categoryLabel(l.category))}</span>` : ""}
+            ${l.difficulty ? `<span class="tag">${esc(l.difficulty)}</span>` : ""}
+            ${l.times_used > 1 ? `<span class="tag">used ${l.times_used}×</span>` : ""}
+          </div>
+          <h3 style="margin-top:10px">${esc(l.title)}</h3>
+          <div class="small muted">${esc(l.blurb)}</div>
+          <div class="tiny muted" style="margin-top:8px">
+            ${l.cards} cards · ${l.questions} questions${
+              l.author ? ` · by ${esc(l.author)}` : ""}</div>
+          <button class="btn small" data-add-lib="${l.id}" style="margin-top:10px"
+            ${l.already_added ? "disabled" : ""}>
+            ${l.already_added ? "In your lessons" : "Add to my lessons"}</button>
+        </div>`).join("")}
+    </div>` : `<div class="card center"><p class="muted">${
+      q ? "Nothing matches that yet." : "The library fills up as lessons get written."}</p></div>`}`;
+
+  document.getElementById("libSearch").onsubmit = (e) => {
+    e.preventDefault();
+    renderLibrary(document.getElementById("libQ").value);
+  };
+
+  view.querySelectorAll("[data-add-lib]").forEach((b) => {
+    b.onclick = async () => {
+      busy(b, true, "Adding…");
+      try {
+        const { id } = await api(`/api/library/${b.dataset.addLib}/add`, { method: "POST" });
+        await loadToday();
+        openLesson(id, null);
+      } catch (err) { busy(b, false); toast(err.message); }
+    };
+  });
 }
 
 /* --- sharing --- */
@@ -1075,12 +1219,37 @@ function renderProfile() {
           </div>
         </div>
 
+        <div class="field">
+          <label>Shared library</label>
+          <label class="check">
+            <input type="checkbox" id="contribute" ${u.contribute_to_library ? "checked" : ""}>
+            <span>Add lessons written for me to the shared library</span>
+          </label>
+          <div class="tiny muted" style="margin-top:6px">Only the lesson and its topic
+            — never your activity log. It means nobody has to pay to write the same
+            lesson twice, and you get everyone else's for free.</div>
+        </div>
+
         <button class="btn" type="submit" id="saveProfile">Save</button>
       </form>
     </div>
 
     <div class="card">
-      <button class="btn ghost wide" id="signout">Log out</button>
+      <h2>Your data</h2>
+      <p class="muted small">Everything Tangent holds about you, as one JSON file.</p>
+      <button class="btn subtle wide" id="exportData" style="margin-top:12px">
+        Download my data</button>
+      <button class="btn ghost wide" id="signout" style="margin-top:10px">Log out</button>
+    </div>
+
+    <div class="card danger">
+      <h2>Delete your account</h2>
+      <p class="muted small">Removes your profile, activity log, observations, lessons
+        and progress. This can't be undone. Lessons you contributed to the library stay,
+        without your name on them.</p>
+      <button class="btn ghost wide" id="deleteAccount" style="margin-top:12px">
+        Delete my account</button>
+      <div id="deleteSlot"></div>
     </div>`;
 
   const preview = document.getElementById("avatarPreview");
@@ -1128,6 +1297,7 @@ function renderProfile() {
         role: document.getElementById("roleEdit").value,
         bio: document.getElementById("bioEdit").value,
         accent: accent === "violet" ? "" : accent,
+        contribute_to_library: document.getElementById("contribute").checked,
       };
       if (pendingAvatar !== undefined) body.avatar = pendingAvatar;
       state.user = await api("/api/auth/me", { method: "PATCH", body });
@@ -1139,6 +1309,38 @@ function renderProfile() {
   };
 
   document.getElementById("signout").onclick = signOut;
+
+  document.getElementById("exportData").onclick = () => {
+    // A normal navigation, so the browser handles Content-Disposition itself.
+    window.location.href = "/api/auth/me/export";
+  };
+
+  document.getElementById("deleteAccount").onclick = () => {
+    const slot = document.getElementById("deleteSlot");
+    if (slot.innerHTML) { slot.innerHTML = ""; return; }
+    slot.innerHTML = `
+      <div class="stack" style="margin-top:14px">
+        <div class="field"><label for="delPass">Confirm with your password</label>
+          <input id="delPass" type="password" autocomplete="current-password"></div>
+        <button class="btn wide" id="confirmDelete" style="background:var(--bad);border-color:var(--bad);color:#2a0f16">
+          Permanently delete everything</button>
+      </div>`;
+    document.getElementById("confirmDelete").onclick = async (e) => {
+      const button = e.currentTarget;
+      busy(button, true, "Deleting…");
+      try {
+        await api("/api/auth/me/delete", {
+          method: "POST",
+          body: { password: document.getElementById("delPass").value },
+        });
+        state.user = null;
+        state.digest = null;
+        state.observations = [];
+        render();
+        toast("Your account and everything in it is gone.");
+      } catch (err) { busy(button, false); toast(err.message); }
+    };
+  };
 }
 
 /* ------------------------------------------------------------------ boot */
@@ -1148,6 +1350,13 @@ function renderProfile() {
   // a signed-out recipient still sees the lesson rather than a login wall.
   const sharedMatch = location.pathname.match(/^\/s\/([\w-]+)\/?$/);
   if (sharedMatch) state.shared = { token: sharedMatch[1] };
+
+  const resetMatch = location.pathname.match(/^\/reset\/([\w-]+)\/?$/);
+  if (resetMatch) {
+    state.resetToken = resetMatch[1];
+    paintStats();
+    return renderReset();   // takes precedence: they can't sign in anyway
+  }
 
   try {
     state.user = await api("/api/auth/me");

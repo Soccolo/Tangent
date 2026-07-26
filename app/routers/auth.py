@@ -1,14 +1,41 @@
 ﻿import base64
 import binascii
+import json
+import logging
+from datetime import datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session as OrmSession
 
-from ..config import DAILY_LESSON_CAP, IS_PRODUCTION
+from .. import mail, ratelimit
+from ..config import (
+    BASE_URL,
+    DAILY_LESSON_CAP,
+    IS_PRODUCTION,
+    RESET_TTL_MINUTES,
+    SESSION_DAYS,
+)
 from ..db import get_db
-from ..models import Session, User
-from ..schemas import ProfileUpdate, SignIn, SignUp
+from ..models import (
+    Activity,
+    Digest,
+    Generation,
+    Lesson,
+    LibraryLesson,
+    Observation,
+    PasswordReset,
+    Session,
+    User,
+)
+from ..schemas import (
+    AccountDelete,
+    ForgotPassword,
+    ProfileUpdate,
+    ResetPassword,
+    SignIn,
+    SignUp,
+)
 from ..security import (
     COOKIE_NAME,
     current_user,
@@ -16,6 +43,8 @@ from ..security import (
     new_token,
     verify_password,
 )
+
+log = logging.getLogger("tangent.auth")
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -60,7 +89,13 @@ def _clean_avatar(raw: str) -> str | None:
 
 def _start_session(response: Response, db: OrmSession, user: User) -> None:
     token = new_token()
-    db.add(Session(token=token, user_id=user.id))
+    db.add(
+        Session(
+            token=token,
+            user_id=user.id,
+            expires_at=datetime.utcnow() + timedelta(days=SESSION_DAYS),
+        )
+    )
     db.commit()
     response.set_cookie(
         COOKIE_NAME,
@@ -87,6 +122,10 @@ def _profile(user: User, db: OrmSession | None = None) -> dict:
         "avatar": user.avatar,
         "bio": user.bio or "",
         "accent": user.accent or "",
+        # Default on: an empty library helps nobody, and topics are subject
+        # matter rather than anything drawn from the activity log.
+        "contribute_to_library": True if user.contribute_to_library is None
+        else bool(user.contribute_to_library),
     }
     if db is not None:
         from .learn import used_today  # local import avoids a circular import
@@ -98,7 +137,16 @@ def _profile(user: User, db: OrmSession | None = None) -> dict:
 
 
 @router.post("/signup", status_code=status.HTTP_201_CREATED)
-def signup(body: SignUp, response: Response, db: OrmSession = Depends(get_db)):
+def signup(
+    body: SignUp,
+    request: Request,
+    response: Response,
+    db: OrmSession = Depends(get_db),
+):
+    ratelimit.check(
+        f"signup:{ratelimit.client_ip(request)}", 5, 3600,
+        "Too many accounts created from here. Try again in an hour.",
+    )
     email = body.email.strip().lower()
     if db.scalar(select(User).where(User.email == email)):
         raise HTTPException(status.HTTP_409_CONFLICT, "That email is already registered")
@@ -116,10 +164,106 @@ def signup(body: SignUp, response: Response, db: OrmSession = Depends(get_db)):
 
 
 @router.post("/signin")
-def signin(body: SignIn, response: Response, db: OrmSession = Depends(get_db)):
-    user = db.scalar(select(User).where(User.email == body.email.strip().lower()))
+def signin(
+    body: SignIn,
+    request: Request,
+    response: Response,
+    db: OrmSession = Depends(get_db),
+):
+    email = body.email.strip().lower()
+    # Two buckets: by IP stops one machine spraying many accounts, by email
+    # stops a botnet converging on one account. Either alone leaves a hole.
+    ratelimit.check(
+        f"signin-ip:{ratelimit.client_ip(request)}", 20, 900,
+        "Too many sign-in attempts. Wait a few minutes and try again.",
+    )
+    ratelimit.check(
+        f"signin-email:{email}", 8, 900,
+        "Too many attempts for this account. Wait a few minutes and try again.",
+    )
+
+    user = db.scalar(select(User).where(User.email == email))
     if user is None or not verify_password(body.password, user.password_hash):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Wrong email or password")
+    _start_session(response, db, user)
+    return _profile(user, db)
+
+
+@router.post("/forgot")
+def forgot_password(
+    body: ForgotPassword,
+    request: Request,
+    db: OrmSession = Depends(get_db),
+):
+    """Always reports success.
+
+    Saying "no such account" would turn this endpoint into a way to test which
+    email addresses are registered.
+    """
+    email = body.email.strip().lower()
+    ratelimit.check(
+        f"forgot-ip:{ratelimit.client_ip(request)}", 5, 900,
+        "Too many reset requests. Wait a few minutes.",
+    )
+    ratelimit.check(f"forgot-email:{email}", 3, 900, "A reset link was already sent.")
+
+    user = db.scalar(select(User).where(User.email == email))
+    if user is not None:
+        token = new_token()
+        db.add(
+            PasswordReset(
+                token=token,
+                user_id=user.id,
+                expires_at=datetime.utcnow() + timedelta(minutes=RESET_TTL_MINUTES),
+            )
+        )
+        db.commit()
+        link = f"{BASE_URL}/reset/{token}"
+        mail.send(
+            user.email,
+            "Reset your Tangent password",
+            "Someone asked to reset the password for your Tangent account.\n\n"
+            f"{link}\n\n"
+            f"The link works once and expires in {RESET_TTL_MINUTES} minutes.\n"
+            "If this wasn't you, ignore this email — nothing has changed.\n",
+        )
+
+    return {"ok": True, "delivery": "email" if mail.configured() else "log"}
+
+
+@router.post("/reset")
+def reset_password(
+    body: ResetPassword,
+    request: Request,
+    response: Response,
+    db: OrmSession = Depends(get_db),
+):
+    ratelimit.check(
+        f"reset:{ratelimit.client_ip(request)}", 10, 900,
+        "Too many attempts. Wait a few minutes.",
+    )
+    record = db.get(PasswordReset, body.token.strip())
+    if (
+        record is None
+        or record.used_at is not None
+        or record.expires_at < datetime.utcnow()
+    ):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "That reset link has expired or already been used. Request a new one.",
+        )
+
+    user = db.get(User, record.user_id)
+    if user is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "That account no longer exists.")
+
+    user.password_hash = hash_password(body.password)
+    record.used_at = datetime.utcnow()
+    # A password change ends every existing session: if the reset was because
+    # someone else had access, leaving their session alive defeats the point.
+    db.execute(delete(Session).where(Session.user_id == user.id))
+    db.commit()
+
     _start_session(response, db, user)
     return _profile(user, db)
 
@@ -149,6 +293,112 @@ def update_me(
 
     if body.avatar is not None:
         user.avatar = _clean_avatar(body.avatar)
+    if body.contribute_to_library is not None:
+        user.contribute_to_library = body.contribute_to_library
 
     db.commit()
     return _profile(user, db)
+
+
+@router.get("/me/export")
+def export_data(user: User = Depends(current_user), db: OrmSession = Depends(get_db)):
+    """Everything held about this account, as one JSON file (GDPR Art. 20)."""
+    lessons = db.scalars(select(Lesson).where(Lesson.user_id == user.id)).all()
+    payload = {
+        "exported_at": datetime.utcnow().isoformat() + "Z",
+        "profile": {
+            "email": user.email,
+            "display_name": user.display_name,
+            "role": user.role,
+            "bio": user.bio,
+            "accent": user.accent,
+            "has_avatar": bool(user.avatar),
+            "created_at": user.created_at.isoformat() if user.created_at else None,
+            "xp": user.xp,
+            "current_streak": user.current_streak,
+            "longest_streak": user.longest_streak,
+        },
+        "activities": [
+            {"day": a.day.isoformat(), "text": a.text, "source": a.source}
+            for a in db.scalars(select(Activity).where(Activity.user_id == user.id))
+        ],
+        "observations": [
+            {
+                "day": o.day.isoformat(),
+                "activity": o.activity,
+                "evidence": o.evidence,
+                "confidence": o.confidence,
+                "status": o.status,
+            }
+            for o in db.scalars(select(Observation).where(Observation.user_id == user.id))
+        ],
+        "digests": [
+            {
+                "day": d.day.isoformat(),
+                "summary": d.summary,
+                "topics": json.loads(d.topics_json or "[]"),
+            }
+            for d in db.scalars(select(Digest).where(Digest.user_id == user.id))
+        ],
+        "lessons": [
+            {
+                "title": lesson.topic_title,
+                "picked_by": lesson.picked_by,
+                "completed": lesson.completed,
+                "score": lesson.score,
+                "total_questions": lesson.total_questions,
+                "xp_awarded": lesson.xp_awarded,
+                "created_at": lesson.created_at.isoformat() if lesson.created_at else None,
+                "content": json.loads(lesson.content_json) if lesson.content_json else None,
+            }
+            for lesson in lessons
+        ],
+    }
+    filename = f"tangent-export-{datetime.utcnow():%Y-%m-%d}.json"
+    return Response(
+        content=json.dumps(payload, indent=2, ensure_ascii=False),
+        media_type="application/json",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.post("/me/delete")
+def delete_account(
+    body: AccountDelete,
+    response: Response,
+    user: User = Depends(current_user),
+    db: OrmSession = Depends(get_db),
+):
+    """Irreversible. Removes the account and everything attached to it."""
+    if not verify_password(body.password, user.password_hash):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "That password isn't right.")
+
+    user_id = user.id
+
+    # Lessons other people copied from this user outlive the account. Break the
+    # foreign key but keep author_name, which is already denormalised — credit
+    # survives, the link doesn't dangle.
+    for copy in db.scalars(
+        select(Lesson).where(
+            Lesson.shared_from_id.in_(select(Lesson.id).where(Lesson.user_id == user_id))
+        )
+    ):
+        copy.shared_from_id = None
+
+    # Library contributions stay — other people's lessons point at them — but
+    # are unlinked from the departing author.
+    for entry in db.scalars(
+        select(LibraryLesson).where(LibraryLesson.author_user_id == user_id)
+    ):
+        entry.author_user_id = None
+        entry.author_name = None
+    db.flush()
+
+    for model in (Observation, Generation, Activity, Lesson, Digest, PasswordReset, Session):
+        db.execute(delete(model).where(model.user_id == user_id))
+    db.execute(delete(User).where(User.id == user_id))
+    db.commit()
+
+    response.delete_cookie(COOKIE_NAME)
+    log.info("Account %s deleted at the user's request", user_id)
+    return {"deleted": True}

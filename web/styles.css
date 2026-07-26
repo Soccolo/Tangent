@@ -600,3 +600,15 @@ header.top .home:active { transform: translateY(1px); }
   background: var(--bg); border-color: var(--border);
   font-size: 14.5px; padding: 9px 11px;
 }
+
+/* --------------------------------------------------- account & library -- */
+
+.card.danger { border: 1px solid rgba(255, 157, 176, .35); }
+.card.danger h2 { color: var(--bad); }
+
+.check {
+  display: flex; align-items: flex-start; gap: 9px;
+  font-size: 14px; color: var(--text); font-weight: 400;
+  cursor: pointer; margin: 0;
+}
+.check input { width: auto; margin: 2px 0 0; accent-color: var(--brand); }

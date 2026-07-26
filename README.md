@@ -44,6 +44,49 @@ spending anything. The account's password is `demodemo` if it didn't already exi
 Tangent's own pick is left ungenerated on purpose: opening it is what exercises the
 real Claude path once a key is in place.
 
+## The shared library
+
+Generation is the dominant cost and it's per *lesson*, not per user. Two people who
+pick "limitation periods in solicitors' negligence" should cost one generation between
+them. So: before generating, Tangent looks for a lesson that already exists; after
+generating, it contributes the result back.
+
+A library hit is **instant and free** — measured at 28ms against 30–60s to generate,
+with the daily quota untouched. Users can also browse the library directly and add
+anything to their own lessons.
+
+Matching is by normalised title (lowercase, punctuation and filler words stripped), so
+"Aggregation: one claim or many?" and "AGGREGATION - One Claim or Many" are the same
+topic. It won't catch genuine paraphrases — that needs embeddings, and this is the
+version worth having before there's usage to tune against.
+
+Contribution is per-user (`contribute_to_library`, default on, toggle in Profile). Only
+the lesson and its topic are shared — never the activity log that produced them.
+`TANGENT_LIBRARY_REUSE=0` disables reuse entirely.
+
+> **Why this matters commercially:** without it, COGS scale with users. With it, they
+> scale with *distinct topics*, which flattens as the library fills. It is the
+> difference between a per-user cost of pennies and of pounds.
+
+## Accounts, data and abuse
+
+| Feature | Detail |
+| --- | --- |
+| Password reset | `/api/auth/forgot` → emailed link → `/reset/<token>`. Single-use, 60-minute expiry, and using it signs out every other session. Known and unknown addresses get **identical** responses, so the endpoint can't be used to test which emails are registered. |
+| Data export | `GET /api/auth/me/export` returns everything held — profile, activities, observations, digests and full lesson content — as a downloadable JSON file (GDPR Art. 20). |
+| Account deletion | `POST /api/auth/me/delete`, confirmed with the current password so a stolen session isn't enough. Removes the account and all its data. Library contributions stay but are unlinked from the author; lessons other people copied survive with the author's name intact and the foreign key nulled. |
+| Rate limiting | Sign-in is limited per IP *and* per email — one machine spraying many accounts and many machines converging on one account are different attacks. Sign-up, forgot and reset are limited too. Responses carry `Retry-After`. |
+| Session expiry | Sessions now carry `expires_at` (90 days, `TANGENT_SESSION_DAYS`) and are deleted on expiry. Rows predating the column fall back to `created_at + TTL`. |
+
+**Email:** set `TANGENT_SMTP_HOST` / `_PORT` / `_USER` / `_PASSWORD` / `TANGENT_MAIL_FROM`
+(any provider — Resend, Postmark, Fastmail). With no SMTP configured, reset links are
+written to the server log instead of sent, and the UI says so rather than pretending an
+email went out.
+
+> **Rate limiting is in-process.** One web service, one set of buckets — a restart
+> clears them and a second instance would get its own budget. That's a deliberate
+> trade-off against adding Redis; revisit it when you scale past one instance.
+
 ## Screen capture
 
 Press **Record while you work** and Tangent watches your screen, writes your log for

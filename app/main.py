@@ -8,7 +8,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .config import WEB_DIR
 from .db import Base, engine, ensure_schema
-from .routers import auth, capture, learn
+from .routers import auth, capture, learn, library
 
 logging.basicConfig(level=logging.INFO)
 
@@ -20,6 +20,7 @@ ensure_schema()  # additive column migration for already-deployed databases
 app.include_router(auth.router)
 app.include_router(learn.router)
 app.include_router(capture.router)
+app.include_router(library.router)
 
 app.mount("/static", StaticFiles(directory=WEB_DIR), name="static")
 
@@ -64,6 +65,12 @@ def _render_index() -> HTMLResponse:
 
 @app.get("/", include_in_schema=False)
 def index():
+    return _render_index()
+
+
+@app.get("/reset/{token}", include_in_schema=False)
+def reset_page(token: str):
+    """Password-reset links arrive by email and land cold."""
     return _render_index()
 
 

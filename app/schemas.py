@@ -21,6 +21,22 @@ class ProfileUpdate(BaseModel):
     # A resized data: URL, not a file — see models.User.avatar. Generous ceiling
     # because base64 inflates ~33%; the client resizes to 256px before sending.
     avatar: str | None = Field(default=None, max_length=400_000)
+    contribute_to_library: bool | None = None
+
+
+class ForgotPassword(BaseModel):
+    email: str = Field(min_length=3, max_length=255)
+
+
+class ResetPassword(BaseModel):
+    token: str = Field(min_length=8, max_length=64)
+    password: str = Field(min_length=8, max_length=200)
+
+
+class AccountDelete(BaseModel):
+    # Requires the current password: deletion is irreversible, and a stolen
+    # session shouldn't be enough to wipe someone's account.
+    password: str = Field(min_length=1, max_length=200)
 
 
 class ActivityIn(BaseModel):

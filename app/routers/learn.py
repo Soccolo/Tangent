@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session as OrmSession
 
 from ..config import (
     DAILY_CAPTURE_CAP,
+    LIBRARY_REUSE,
     DAILY_DIGEST_CAP,
     DAILY_LESSON_CAP,
     GLOBAL_DAILY_CAP,
@@ -17,6 +18,7 @@ from ..config import (
 from ..db import SessionLocal, get_db
 from ..llm import LLMError, generate_lesson, suggest_topics
 from ..models import Activity, Digest, Generation, Lesson, User, utcnow
+from .library import find_match, publish
 from ..schemas import ActivityIn, AnswerSet, ChoosePick
 from ..security import current_user
 
@@ -322,6 +324,20 @@ def _generate_lesson_job(lesson_id: int, role: str, topic: dict, summary: str) -
         lesson.total_questions = len(content.get("questions", []))
         lesson.status = "ready"
         lesson.error = ""
+
+        # Contribute it so the next person asking this doesn't pay for it again.
+        author = db.get(User, lesson.user_id)
+        entry = publish(
+            db,
+            title=lesson.topic_title,
+            blurb=lesson.topic_blurb,
+            content_json=lesson.content_json,
+            author=author,
+            category=topic.get("category", "") if isinstance(topic, dict) else "",
+            difficulty=topic.get("difficulty", "") if isinstance(topic, dict) else "",
+        )
+        if entry is not None:
+            lesson.library_id = entry.id
         db.commit()
     finally:
         db.close()
@@ -367,10 +383,37 @@ def get_lesson(
         db.commit()
         return {"id": lesson.id, "status": "failed", "error": error}
 
-    claim_quota(db, user.id, "lesson")
     digest = db.get(Digest, lesson.digest_id) if lesson.digest_id else None
     topic = _topic_for(lesson, db)
     summary = digest.summary if digest else ""
+
+    # Before paying to write this, check whether it already exists. A hit is
+    # instant and free — this is what stops cost scaling with users rather than
+    # with topics.
+    if LIBRARY_REUSE:
+        match = find_match(db, lesson.topic_title)
+        if match is not None:
+            content = json.loads(match.content_json)
+            lesson.content_json = match.content_json
+            lesson.total_questions = len(content.get("questions", []))
+            lesson.status = "ready"
+            lesson.library_id = match.id
+            lesson.author_name = lesson.author_name or match.author_name
+            match.times_used += 1
+            db.commit()
+            log.info("library hit for %r (used %s times)", lesson.topic_title, match.times_used)
+            return {
+                "id": lesson.id,
+                "status": "ready",
+                "picked_by": lesson.picked_by,
+                "completed": lesson.completed,
+                "score": lesson.score,
+                "content": content,
+                "from_library": True,
+                "author": lesson.author_name,
+            }
+
+    claim_quota(db, user.id, "lesson")
     lesson.status = "generating"
     db.commit()
 

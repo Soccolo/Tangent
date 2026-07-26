@@ -67,4 +67,27 @@ DAILY_LESSON_CAP = int(os.environ.get("TANGENT_DAILY_LESSON_CAP", "6"))
 DAILY_DIGEST_CAP = int(os.environ.get("TANGENT_DAILY_DIGEST_CAP", "4"))
 GLOBAL_DAILY_CAP = int(os.environ.get("TANGENT_GLOBAL_DAILY_CAP", "300"))
 
+# --- Sessions & email --------------------------------------------------------
+SESSION_DAYS = int(os.environ.get("TANGENT_SESSION_DAYS", "90"))
+RESET_TTL_MINUTES = int(os.environ.get("TANGENT_RESET_TTL_MINUTES", "60"))
+
+# Public origin, used to build password-reset links. Render exposes its own
+# hostname; fall back to that so this works with no configuration.
+_render_host = os.environ.get("RENDER_EXTERNAL_HOSTNAME")
+BASE_URL = os.environ.get(
+    "TANGENT_BASE_URL",
+    f"https://{_render_host}" if _render_host else "http://localhost:8000",
+).rstrip("/")
+
+SMTP_HOST = os.environ.get("TANGENT_SMTP_HOST", "")
+SMTP_PORT = int(os.environ.get("TANGENT_SMTP_PORT", "587"))
+SMTP_USER = os.environ.get("TANGENT_SMTP_USER", "")
+SMTP_PASSWORD = os.environ.get("TANGENT_SMTP_PASSWORD", "")
+MAIL_FROM = os.environ.get("TANGENT_MAIL_FROM", "Tangent <no-reply@localhost>")
+
+# --- Library -----------------------------------------------------------------
+# Reuse an existing lesson when someone picks a topic already written. This is
+# the difference between cost scaling with users and cost scaling with topics.
+LIBRARY_REUSE = os.environ.get("TANGENT_LIBRARY_REUSE", "1") not in ("0", "false", "False")
+
 WEB_DIR = BASE_DIR / "web"

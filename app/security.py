@@ -2,10 +2,12 @@ import hashlib
 import hmac
 import os
 import secrets
+from datetime import datetime, timedelta, timezone
 
 from fastapi import Cookie, Depends, HTTPException, status
 from sqlalchemy.orm import Session as OrmSession
 
+from .config import SESSION_DAYS
 from .db import get_db
 from .models import Session, User
 
@@ -43,6 +45,15 @@ def current_user(
     session = db.get(Session, tangent_session)
     if session is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Session expired")
+
+    # Rows created before expires_at existed fall back to created_at + TTL, so
+    # old sessions age out rather than living forever.
+    deadline = session.expires_at or (session.created_at + timedelta(days=SESSION_DAYS))
+    if datetime.now(timezone.utc).replace(tzinfo=None) > deadline:
+        db.delete(session)
+        db.commit()
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Session expired")
+
     user = db.get(User, session.user_id)
     if user is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Session expired")

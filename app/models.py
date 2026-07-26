@@ -35,6 +35,10 @@ class User(Base):
     avatar: Mapped[str | None] = mapped_column(Text, nullable=True)
     bio: Mapped[str | None] = mapped_column(Text, nullable=True)
     accent: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    # Whether lessons generated for this user join the shared library. Topics
+    # are subject matter ("limitation periods"), never the activity log that
+    # produced them — but it's still the user's call.
+    contribute_to_library: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     xp: Mapped[int] = mapped_column(Integer, default=0)
@@ -51,6 +55,43 @@ class Session(Base):
 
     token: Mapped[str] = mapped_column(String(64), primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    # Nullable so rows created before this column existed stay valid; they're
+    # treated as expiring SESSION_DAYS after creation instead.
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class PasswordReset(Base):
+    __tablename__ = "password_resets"
+
+    token: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class LibraryLesson(Base):
+    """A generated lesson kept for reuse by anyone who picks the same topic.
+
+    This is the economics of the product: generation is the dominant cost and
+    it's per-lesson, not per-user. Two people asking about limitation periods
+    should cost one generation, not two.
+    """
+
+    __tablename__ = "library_lessons"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    # Normalised title — the lookup key for "have we already written this?"
+    topic_key: Mapped[str] = mapped_column(String(255), index=True)
+    title: Mapped[str] = mapped_column(String(255))
+    blurb: Mapped[str] = mapped_column(Text, default="")
+    category: Mapped[str] = mapped_column(String(32), default="")
+    difficulty: Mapped[str] = mapped_column(String(16), default="")
+    content_json: Mapped[str] = mapped_column(Text)
+    author_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    author_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    times_used: Mapped[int] = mapped_column(Integer, default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
@@ -145,5 +186,8 @@ class Lesson(Base):
     share_token: Mapped[str | None] = mapped_column(String(48), unique=True, nullable=True)
     shared_from_id: Mapped[int | None] = mapped_column(ForeignKey("lessons.id"), nullable=True)
     author_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    library_id: Mapped[int | None] = mapped_column(
+        ForeignKey("library_lessons.id"), nullable=True
+    )
 
     user: Mapped[User] = relationship(back_populates="lessons")
