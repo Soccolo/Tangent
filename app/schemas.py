@@ -30,6 +30,9 @@ class ProfileUpdate(BaseModel):
     # because base64 inflates ~33%; the client resizes to 256px before sending.
     avatar: str | None = Field(default=None, max_length=400_000)
     contribute_to_library: bool | None = None
+    learning_goals: str | None = Field(default=None, max_length=1000)
+    aim: str | None = Field(default=None, max_length=500)
+    onboarded: bool | None = None
     theme: str | None = Field(default=None, max_length=16)
     default_level: int | None = Field(default=None, ge=1, le=10)
 

@@ -39,6 +39,11 @@ class User(Base):
     # are subject matter ("limitation periods"), never the activity log that
     # produced them — but it's still the user's call.
     contribute_to_library: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    # What they said they want to learn, and what they want out of it. Both
+    # feed the topic prompt — this is an interview, not a form.
+    learning_goals: Mapped[str | None] = mapped_column(Text, nullable=True)
+    aim: Mapped[str | None] = mapped_column(Text, nullable=True)
+    onboarded_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     # "system" | "light" | "dark". Null means system.
     theme: Mapped[str | None] = mapped_column(String(16), nullable=True)
     # Default self-rated knowledge, 1-10, used to pre-set the per-lesson slider.

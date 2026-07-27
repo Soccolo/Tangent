@@ -207,7 +207,12 @@ def build_today_digest(
 
     claim_quota(db, user.id, "digest")
     try:
-        result = suggest_topics(user.role, [a.text for a in activities])
+        result = suggest_topics(
+            user.role,
+            [a.text for a in activities],
+            user.learning_goals or "",
+            user.aim or "",
+        )
     except LLMError as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
 

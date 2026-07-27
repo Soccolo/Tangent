@@ -126,6 +126,9 @@ def _profile(user: User, db: OrmSession | None = None) -> dict:
         # matter rather than anything drawn from the activity log.
         "contribute_to_library": True if user.contribute_to_library is None
         else bool(user.contribute_to_library),
+        "learning_goals": user.learning_goals or "",
+        "aim": user.aim or "",
+        "onboarded": user.onboarded_at is not None,
         "theme": user.theme or "system",
         "default_level": user.default_level or 5,
     }
@@ -301,6 +304,12 @@ def update_me(
         user.avatar = _clean_avatar(body.avatar)
     if body.contribute_to_library is not None:
         user.contribute_to_library = body.contribute_to_library
+    if body.learning_goals is not None:
+        user.learning_goals = body.learning_goals.strip() or None
+    if body.aim is not None:
+        user.aim = body.aim.strip() or None
+    if body.onboarded:
+        user.onboarded_at = user.onboarded_at or datetime.utcnow()
     if body.theme in {"system", "light", "dark"}:
         user.theme = body.theme
     if body.default_level is not None:

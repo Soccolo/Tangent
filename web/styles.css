@@ -741,3 +741,145 @@ input[type=range]::-moz-range-thumb {
   font-size: 11.5px; font-weight: 700; letter-spacing: .06em;
   text-transform: uppercase; color: var(--muted);
 }
+
+/* ==========================================================================
+   Tangent the owl — expressions, animation, speech
+   Moods are a class on .owl-svg; every part animates off that one hook.
+   ========================================================================== */
+
+.owl { display: flex; flex-direction: column; align-items: center; gap: 12px; }
+.owl-svg { overflow: visible; }
+.owl-all { animation: owlFloat 5s ease-in-out infinite; transform-origin: 60px 110px; }
+
+/* Parts are positioned relative to their own box so transforms are predictable. */
+.owl-lid, .owl-smile-l, .owl-smile-r, .owl-brow, .owl-head, .owl-wing, .owl-pupils, .owl-tassel {
+  transform-box: fill-box;
+}
+
+/* --- blinking: the thing that makes it feel alive at rest --- */
+.owl-lid {
+  transform-origin: center top;
+  transform: scaleY(0);
+  animation: owlBlink 5.4s infinite;
+}
+.owl-svg.is-happy .owl-lid,
+.owl-svg.is-proud .owl-lid { animation: none; transform: scaleY(0); }
+
+/* --- smiling eyes, revealed from the bottom --- */
+.owl-smile-l, .owl-smile-r {
+  transform-origin: center bottom;
+  transform: scaleY(0);
+  transition: transform .28s cubic-bezier(.2,.8,.2,1);
+}
+.owl-svg.is-happy .owl-smile-l, .owl-svg.is-happy .owl-smile-r,
+.owl-svg.is-proud .owl-smile-l, .owl-svg.is-proud .owl-smile-r { transform: scaleY(1); }
+
+/* --- brows carry most of the expression --- */
+.owl-brow { transform-origin: center; transition: transform .28s ease; }
+.owl-svg.is-happy  .owl-brow-l { transform: translateY(-3px) rotate(-8deg); }
+.owl-svg.is-happy  .owl-brow-r { transform: translateY(-3px) rotate(8deg); }
+.owl-svg.is-proud  .owl-brow-l { transform: translateY(-4px) rotate(-10deg); }
+.owl-svg.is-proud  .owl-brow-r { transform: translateY(-4px) rotate(10deg); }
+.owl-svg.is-oops   .owl-brow-l { transform: translateY(3px) rotate(13deg); }
+.owl-svg.is-oops   .owl-brow-r { transform: translateY(3px) rotate(-13deg); }
+.owl-svg.is-thinking .owl-brow-l { transform: translateY(-5px) rotate(-14deg); }
+.owl-svg.is-curious  .owl-brow-l { transform: translateY(-4px); }
+
+/* --- eyes look around --- */
+.owl-pupils { transition: transform .35s cubic-bezier(.2,.8,.2,1); }
+.owl-svg.is-thinking .owl-pupils { transform: translate(-3px, -3px); }
+.owl-svg.is-curious  .owl-pupils { transform: translate(3px, -2px); }
+.owl-svg.is-oops     .owl-pupils { transform: translateY(2px); }
+
+/* --- head tilts --- */
+.owl-head { transform-origin: center bottom; transition: transform .35s cubic-bezier(.2,.8,.2,1); }
+.owl-svg.is-curious  .owl-head { transform: rotate(-7deg); }
+.owl-svg.is-thinking .owl-head { transform: rotate(5deg); }
+.owl-svg.is-oops     .owl-head { transform: rotate(-4deg); }
+
+/* --- wings: waving hello, and celebrating --- */
+.owl-wing { transform-origin: center top; transition: transform .3s ease; }
+.owl-svg.is-wave .owl-wing-r { animation: owlWave .7s ease-in-out 3; }
+.owl-svg.is-happy .owl-wing-l,
+.owl-svg.is-proud .owl-wing-l { transform: rotate(24deg) translateY(-4px); }
+.owl-svg.is-happy .owl-wing-r,
+.owl-svg.is-proud .owl-wing-r { transform: rotate(-24deg) translateY(-4px); }
+
+.owl-svg.is-happy .owl-all { animation: owlBounce .55s cubic-bezier(.3,1.4,.5,1) 1, owlFloat 5s ease-in-out infinite .55s; }
+.owl-svg.is-proud .owl-all { animation: owlBounce .55s cubic-bezier(.3,1.4,.5,1) 2, owlFloat 5s ease-in-out infinite 1.1s; }
+.owl-svg.is-oops  .owl-all { animation: owlShake .5s ease-in-out 1, owlFloat 5s ease-in-out infinite .5s; }
+
+.owl-tassel { transform-origin: 96px 37px; animation: owlTassel 3.4s ease-in-out infinite; }
+
+@keyframes owlFloat  { 0%,100% { transform: translateY(0) rotate(-1deg); } 50% { transform: translateY(-7px) rotate(1deg); } }
+@keyframes owlBlink  { 0%,95%,100% { transform: scaleY(0); } 96.5%,98% { transform: scaleY(1); } }
+@keyframes owlBounce { 0% { transform: translateY(0) scale(1); } 40% { transform: translateY(-16px) scale(1.05); } 100% { transform: translateY(0) scale(1); } }
+@keyframes owlShake  { 0%,100% { transform: translateX(0); } 25% { transform: translateX(-6px) rotate(-2deg); } 75% { transform: translateX(6px) rotate(2deg); } }
+@keyframes owlWave   { 0%,100% { transform: rotate(0); } 50% { transform: rotate(-42deg); } }
+@keyframes owlTassel { 0%,100% { transform: rotate(-6deg); } 50% { transform: rotate(9deg); } }
+
+/* --- speech --- */
+
+.owl-bubble {
+  position: relative;
+  max-width: 30ch;
+  padding: 13px 16px;
+  border-radius: 16px;
+  background: var(--surface-2);
+  border: 1px solid var(--border-soft);
+  font-size: 15.5px; line-height: 1.5; text-align: center;
+  min-height: 1.5em;
+  animation: rise .3s ease both;
+}
+.owl-bubble::before {
+  content: ""; position: absolute; top: -7px; left: 50%; margin-left: -7px;
+  width: 13px; height: 13px; background: var(--surface-2);
+  border-left: 1px solid var(--border-soft); border-top: 1px solid var(--border-soft);
+  transform: rotate(45deg);
+}
+
+/* --- the owl as a reaction inside a lesson --- */
+
+.reaction {
+  display: flex; align-items: flex-start; gap: 12px;
+  padding: 14px 16px; border-radius: var(--radius-sm);
+  margin-bottom: 14px;
+  animation: rise .32s cubic-bezier(.2,.8,.2,1) both;
+}
+.reaction.correct { background: var(--good-soft); }
+.reaction.wrong   { background: var(--bad-soft); }
+.reaction .owl-svg { flex: none; margin-top: -4px; }
+.reaction .said { flex: 1; }
+.reaction .said b { display: block; margin-bottom: 3px; font-size: 15.5px; }
+.reaction.correct .said b { color: var(--good); }
+.reaction.wrong   .said b { color: var(--bad); }
+.reaction .said span { font-size: 14.5px; }
+
+/* --- onboarding --- */
+
+.intro { text-align: center; }
+.intro .owl { margin-bottom: 6px; }
+.intro h1 { font-size: 26px; margin-top: 10px; }
+.intro .step-dots { display: flex; gap: 6px; justify-content: center; margin-bottom: 18px; }
+.intro .step-dots i {
+  width: 7px; height: 7px; border-radius: 50%; background: var(--border);
+  transition: background .3s ease, transform .3s ease;
+}
+.intro .step-dots i.on { background: var(--brand); transform: scale(1.3); }
+.intro .field { text-align: left; margin-top: 18px; }
+
+.chips { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 14px; }
+.chip {
+  padding: 9px 14px; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--border-soft); background: var(--surface-2);
+  color: var(--text); font-size: 14px;
+  transition: border-color .15s ease, background .15s ease, transform .1s ease;
+}
+.chip:hover { border-color: var(--brand); }
+.chip:active { transform: translateY(1px); }
+.chip[aria-pressed="true"] { background: var(--brand-fill); border-color: var(--brand); color: var(--brand-pale); }
+
+@media (prefers-reduced-motion: reduce) {
+  .owl-all, .owl-lid, .owl-tassel, .owl-svg.is-happy .owl-all,
+  .owl-svg.is-proud .owl-all, .owl-svg.is-oops .owl-all { animation: none !important; }
+}

@@ -9,6 +9,9 @@ const state = {
   digest: null,
   activities: [],
   saved: [],         // shared lessons added from someone else's link
+  introing: false,   // replaying the intro from Profile
+  introStep: 0,
+  introDraft: null,
   observations: [],  // capture proposals awaiting a yes/no
   shared: null,      // { token, ... } when viewing /s/<token>
   lesson: null,      // { id, content, pickedBy }
@@ -184,6 +187,9 @@ function render() {
   paintStats();
   if (state.shared) return renderShared();
   if (!state.user) return renderAuth();
+  // A new account meets Tangent before it meets the dashboard — the app makes
+  // no sense until someone explains what it's for.
+  if (!state.user.onboarded || state.introing) return renderIntro();
   tabs.classList.remove("hidden");
   if (state.lesson) return renderLesson();
   if (state.tab === "library") return renderLibrary();
@@ -198,9 +204,10 @@ function renderAuth() {
   tabs.classList.add("hidden");
   view.innerHTML = `
     <div class="card center" style="margin-top:24px">
-      <img src="/static/owl.svg" alt="" width="86" height="86">
-      <h1 style="margin-top:8px">Learn the ring around your job</h1>
-      <p class="muted">Tangent watches what you work on, then teaches you the
+      ${Owl.render({ size: 104, mood: "wave" })}
+      <div class="owl-bubble" id="authSay"></div>
+      <h1 style="margin-top:16px">Learn the ring around your job</h1>
+      <p class="muted">You already know what you do. Tangent teaches you the
       subjects next door — the ones nobody assigns you.</p>
     </div>
 
@@ -225,6 +232,10 @@ function renderAuth() {
       <button class="btn ghost small wide" id="forgotLink" style="margin-top:10px">
         Forgot your password?</button>
     </div>`;
+
+  const authOwl = view.querySelector(".owl");
+  Owl.say(document.getElementById("authSay"), "Hello — I'm Tangent.");
+  setTimeout(() => Owl.setMood(authOwl, "happy"), 2400);
 
   let mode = "signin";
   const setMode = (next) => {
@@ -446,6 +457,178 @@ if (window.TangentCapture) {
   });
 
   TangentCapture.on("error", (message) => toast(message));
+}
+
+/* --- meeting Tangent --- */
+
+const AIM_CHIPS = [
+  "Be useful in more conversations",
+  "Move into a new area",
+  "Keep up with my field",
+  "Stop nodding along in meetings",
+  "Plain curiosity",
+];
+
+function introSteps(user) {
+  return [
+    {
+      mood: "wave",
+      line: "Hello — I'm Tangent.",
+      sub: "The owl in the glasses. Pleased to meet you.",
+    },
+    {
+      mood: "curious",
+      line: "Here's the idea.",
+      sub: "You already know your own job. I'm interested in everything sitting just "
+         + "next to it — the neighbouring discipline, the rule that shapes your work, "
+         + "the technique one step past the one you used today.",
+    },
+    {
+      mood: "thinking",
+      line: "It works like this.",
+      sub: "You tell me what you worked on. Each evening I find six subjects next "
+         + "door to it, you pick one, and I pick a second from somewhere else "
+         + "entirely. Then I teach you both.",
+    },
+    {
+      mood: "curious",
+      line: "So — what do you do?",
+      key: "role",
+      placeholder: "e.g. Pricing actuary — financial lines, UK. Mostly PI and D&O case pricing.",
+      hint: "Be specific. This is how I tell what you already know from what's next door.",
+      rows: 3,
+    },
+    {
+      mood: "thinking",
+      line: "And what do you wish you understood better?",
+      key: "learning_goals",
+      placeholder: "e.g. The legal side of the claims I price. Modern ML, properly this time.",
+      hint: "I'll lean towards these when today's work gives me the chance. Leave it blank if you'd rather be surprised.",
+      rows: 3,
+      optional: true,
+    },
+    {
+      mood: "curious",
+      line: "Last one. What would make this worth your time?",
+      key: "aim",
+      chips: AIM_CHIPS,
+      placeholder: "Or say it in your own words…",
+      optional: true,
+    },
+    {
+      mood: "proud",
+      line: "That's everything.",
+      sub: "Log what you work on — a line or two is plenty — and press the button. "
+         + "I'll do the rest.",
+      last: true,
+    },
+  ];
+}
+
+function renderIntro() {
+  tabs.classList.add("hidden");
+  const steps = introSteps(state.user);
+  state.introDraft = state.introDraft || {
+    role: state.user.role || "",
+    learning_goals: state.user.learning_goals || "",
+    aim: state.user.aim || "",
+  };
+  let i = Math.min(state.introStep || 0, steps.length - 1);
+
+  const paint = () => {
+    const step = steps[i];
+    const value = step.key ? state.introDraft[step.key] : "";
+    view.innerHTML = `
+      <div class="card intro" style="margin-top:18px">
+        <div class="step-dots">
+          ${steps.map((_, n) => `<i class="${n <= i ? "on" : ""}"></i>`).join("")}
+        </div>
+        ${Owl.render({ size: 108, mood: step.mood })}
+        <div class="owl-bubble" id="introSay"></div>
+        ${step.sub ? `<p class="muted small" id="introSub" style="margin-top:14px;opacity:0">${esc(step.sub)}</p>` : ""}
+        ${step.key ? `
+          <div class="field">
+            ${step.chips ? `<div class="chips" id="introChips">
+              ${step.chips.map((c) => `<button type="button" class="chip"
+                data-chip="${esc(c)}" aria-pressed="${value === c}">${esc(c)}</button>`).join("")}
+            </div>` : ""}
+            <textarea id="introInput" rows="${step.rows || 2}"
+              placeholder="${esc(step.placeholder || "")}"
+              style="margin-top:${step.chips ? "12px" : "0"}">${esc(value)}</textarea>
+            ${step.hint ? `<div class="tiny muted" style="margin-top:6px">${esc(step.hint)}</div>` : ""}
+          </div>` : ""}
+        <button class="btn wide" id="introNext" style="margin-top:16px">
+          ${step.last ? "Let's go" : "Continue"}</button>
+        <div class="row" style="justify-content:center;margin-top:10px">
+          ${i > 0 ? `<button class="btn ghost small" id="introBack">Back</button>` : ""}
+          ${!step.last ? `<button class="btn ghost small" id="introSkip">Skip the tour</button>` : ""}
+        </div>
+      </div>`;
+
+    const owl = view.querySelector(".owl");
+    Owl.say(document.getElementById("introSay"), step.line, {
+      done: () => {
+        const sub = document.getElementById("introSub");
+        if (sub) sub.style.transition = "opacity .4s ease", sub.style.opacity = "1";
+        const input = document.getElementById("introInput");
+        if (input && !step.chips) input.focus();
+      },
+    });
+    // Settle to a resting expression once the greeting animation has played.
+    if (step.mood === "wave") setTimeout(() => Owl.setMood(owl, "happy"), 2400);
+
+    const chips = document.getElementById("introChips");
+    if (chips) chips.onclick = (e) => {
+      const chip = e.target.closest("[data-chip]");
+      if (!chip) return;
+      const picked = chip.dataset.chip;
+      const already = chip.getAttribute("aria-pressed") === "true";
+      view.querySelectorAll("[data-chip]").forEach((c) =>
+        c.setAttribute("aria-pressed", String(!already && c.dataset.chip === picked)));
+      document.getElementById("introInput").value = already ? "" : picked;
+    };
+
+    const capture = () => {
+      const input = document.getElementById("introInput");
+      if (input && step.key) state.introDraft[step.key] = input.value.trim();
+    };
+
+    document.getElementById("introNext").onclick = async (e) => {
+      capture();
+      if (step.key && !step.optional && !state.introDraft[step.key]) {
+        Owl.setMood(owl, "curious");
+        Owl.say(document.getElementById("introSay"),
+          "I do need this one — even a rough answer helps.", { typed: false });
+        return;
+      }
+      if (!step.last) { i++; state.introStep = i; return paint(); }
+      await finishIntro(e.currentTarget);
+    };
+
+    const back = document.getElementById("introBack");
+    if (back) back.onclick = () => { capture(); i--; state.introStep = i; paint(); };
+
+    const skip = document.getElementById("introSkip");
+    if (skip) skip.onclick = (e) => { capture(); finishIntro(e.currentTarget); };
+  };
+
+  paint();
+}
+
+async function finishIntro(button) {
+  busy(button, true, "Setting up…");
+  try {
+    state.user = await api("/api/auth/me", {
+      method: "PATCH",
+      body: { ...state.introDraft, onboarded: true },
+    });
+    state.introing = false;
+    state.introStep = 0;
+    state.introDraft = null;
+    await loadToday();
+    setTab("today");
+    toast("Welcome aboard.");
+  } catch (err) { busy(button, false); toast(err.message); }
 }
 
 /* --- picking a topic: level, and optionally two diagnostic questions --- */
@@ -852,6 +1035,31 @@ const WRITING_LINES = [
   "Checking the explanations hold up…",
 ];
 
+/* Tangent reacting to an answer. Varied openers so a run of questions doesn't
+   read like the same stamp four times — and the explanation stays exactly where
+   it was, just delivered by someone rather than by a box. */
+const PRAISE = [
+  "That's it.", "Exactly right.", "Nicely done.", "Spot on.",
+  "Yes — good.", "That's the one.", "Correct, and quickly.",
+];
+const CONSOLE_ = [
+  "Not quite — here's the thing.", "Close, but no.", "Ah, not this time.",
+  "That's the common answer, but no.", "Not that one — look at this.",
+];
+
+function reactionHtml(correct, explanation, seed = 0) {
+  const bank = correct ? PRAISE : CONSOLE_;
+  const line = bank[(seed + (correct ? 0 : 2)) % bank.length];
+  return `
+    <div class="reaction ${correct ? "correct" : "wrong"}">
+      ${Owl.svg(52, correct ? "happy" : "oops")}
+      <div class="said">
+        <b>${esc(line)}</b>
+        <span>${esc(explanation)}</span>
+      </div>
+    </div>`;
+}
+
 function lessonSourceLabel(lesson) {
   if (lesson.picked_by === "library") return lesson.author ? `Library · ${lesson.author}` : "From the library";
   if (lesson.picked_by === "shared") return `From ${lesson.author || "someone"}`;
@@ -1026,12 +1234,8 @@ function renderQuestion(question, qIndex) {
         return `<button class="${cls}" data-opt="${i}" ${answered ? "disabled" : ""}>${esc(opt)}</button>`;
       }).join("")}
     </div>
-    ${answered ? `
-      <div class="verdict ${chosen === question.answer_index ? "correct" : "wrong"}">
-        <b>${chosen === question.answer_index ? "Correct" : "Not quite"}</b>
-        ${esc(question.explanation)}
-      </div>
-      <button class="btn wide" id="next">Continue</button>` : ""}`;
+    ${answered ? reactionHtml(chosen === question.answer_index, question.explanation, qIndex)
+      + `<button class="btn wide" id="next">Continue</button>` : ""}`;
 
   stage.querySelectorAll("[data-opt]").forEach((b) => {
     b.onclick = () => {
@@ -1066,10 +1270,12 @@ async function renderFinish() {
   paintStats();
 
   const perfect = result.score === result.total && result.total > 0;
+  const half = result.score >= result.total / 2;
   view.innerHTML = `
     <div class="card center">
-      <img src="/static/owl.svg" alt="" width="72" height="72">
-      <h1>${perfect ? "Clean sweep." : result.score >= result.total / 2 ? "Nice work." : "Worth another pass."}</h1>
+      ${Owl.render({ size: 96, mood: perfect ? "proud" : half ? "happy" : "curious" })}
+      <div class="owl-bubble" id="finishSay"></div>
+      <h1 style="margin-top:16px">${perfect ? "Clean sweep." : half ? "Nice work." : "Worth another pass."}</h1>
       <div class="bigscore">${result.score}<span class="muted" style="font-size:24px">/${result.total}</span></div>
       <div class="rewards">
         <div class="reward"><div class="n">+${result.xp_awarded}</div><div class="tiny muted">XP earned</div></div>
@@ -1083,6 +1289,11 @@ async function renderFinish() {
       <button class="btn ghost wide" id="shareBtn" style="margin-top:10px">Share this lesson</button>
       <div id="shareSlot"></div>
     </div>`;
+  Owl.say(document.getElementById("finishSay"),
+    perfect ? "Every one. You knew more than you let on."
+    : half ? `${result.score} out of ${result.total}. That'll stick.`
+    : "The ones you missed are the ones worth rereading. Come back to it.");
+
   document.getElementById("done").onclick = exitLesson;
   document.getElementById("shareBtn").onclick = (e) =>
     shareLesson(state.lesson.id, e.currentTarget, document.getElementById("shareSlot"));
@@ -1443,6 +1654,14 @@ function renderProfile() {
     </div>
 
     <div class="card">
+      <h2>Meet Tangent again</h2>
+      <p class="muted small">Replay the introduction and revisit what you told me
+        about your work and what you're after.</p>
+      <button class="btn subtle wide" id="replayIntro" style="margin-top:12px">
+        Run the intro again</button>
+    </div>
+
+    <div class="card">
       <h2>Your data</h2>
       <p class="muted small">Everything Tangent holds about you, as one JSON file.</p>
       <button class="btn subtle wide" id="exportData" style="margin-top:12px">
@@ -1535,6 +1754,13 @@ function renderProfile() {
   };
 
   document.getElementById("signout").onclick = signOut;
+
+  document.getElementById("replayIntro").onclick = () => {
+    state.introing = true;
+    state.introStep = 0;
+    state.introDraft = null;
+    render();
+  };
 
   document.getElementById("exportData").onclick = () => {
     // A normal navigation, so the browser handles Content-Disposition itself.

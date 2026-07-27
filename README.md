@@ -44,6 +44,25 @@ spending anything. The account's password is `demodemo` if it didn't already exi
 Tangent's own pick is left ungenerated on purpose: opening it is what exercises the
 real Claude path once a key is in place.
 
+## Tangent, the owl
+
+The owl is a character, not a logo. `web/owl.js` rebuilds it as inline SVG with its
+parts tagged — lids, brows, pupils, wings, head, tassel — so expressions are a single
+class on the root: `idle`, `wave`, `curious`, `thinking`, `happy`, `proud`, `oops`.
+Everything else is CSS. `owl.svg` stays as the favicon.
+
+It blinks at rest, waves hello, tilts its head when it asks a question, beams when you
+get one right, and winces when you don't. Speech is typed out a word at a time —
+skipped entirely under `prefers-reduced-motion`, since a typewriter is decoration and
+decoration shouldn't be the only way to receive information.
+
+**New accounts meet Tangent before they meet the dashboard.** A seven-step intro
+introduces the owl by name, explains the idea in three beats, then asks what you do,
+what you wish you understood better, and what would make this worth your time. The last
+two feed the topic prompt directly — the answers steer which adjacent topics get
+favoured, without ever pulling suggestions away from what you actually did that day.
+Skippable, and replayable from Profile.
+
 ## The shared library
 
 Generation is the dominant cost and it's per *lesson*, not per user. Two people who
