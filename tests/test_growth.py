@@ -44,6 +44,11 @@ QUESTIONS = [
     },
 ]
 
+TINY_AVATAR = (
+    "data:image/png;base64,"
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+)
+
 
 class GrowthApiTests(unittest.TestCase):
     @classmethod
@@ -195,13 +200,42 @@ class GrowthApiTests(unittest.TestCase):
             self.assertEqual(response.status_code, 200, response.text)
 
         item = next(
-            product for product in growth["workshop"]["items"] if not product["owned"]
+            product
+            for product in growth["workshop"]["items"]
+            if product["key"] == "owl_scholar_cap"
         )
         bought = self.client.post(
             "/api/growth/workshop/purchase", json={"item_key": item["key"]}
         )
         self.assertEqual(bought.status_code, 200, bought.text)
         self.assertTrue(bought.json()["owned"])
+        self.assertTrue(bought.json()["auto_equipped"])
+        self.assertEqual(
+            bought.json()["profile_picture"]["owl"]["accessory"], item["key"]
+        )
+
+        profile = self.client.get("/api/auth/me").json()
+        self.assertEqual(profile["profile_picture"]["kind"], "owl")
+        self.assertEqual(
+            profile["profile_picture"]["owl"]["accessory"], item["key"]
+        )
+
+        exported = self.client.get("/api/auth/me/export").json()
+        self.assertEqual(
+            exported["profile"]["profile_picture"], profile["profile_picture"]
+        )
+        self.assertEqual(exported["growth"]["equipped"]["owl_accessory"], item["key"])
+
+        classic = self.client.post("/api/growth/workshop/classic")
+        self.assertEqual(classic.status_code, 200, classic.text)
+        self.assertIsNone(classic.json()["profile_picture"]["owl"]["accessory"])
+        owned_cap = next(
+            product
+            for product in classic.json()["workshop"]["items"]
+            if product["key"] == item["key"]
+        )
+        self.assertTrue(owned_cap["owned"])
+        self.assertFalse(owned_cap["equipped"])
 
         equipped = self.client.post(
             "/api/growth/workshop/equip", json={"item_key": item["key"]}
@@ -213,6 +247,51 @@ class GrowthApiTests(unittest.TestCase):
             "/api/growth/workshop/purchase", json={"item_key": item["key"]}
         )
         self.assertEqual(duplicate.status_code, 409, duplicate.text)
+
+    def test_owl_equipping_is_user_scoped_and_public_keys_are_allowlisted(self):
+        self.signup()
+        self.completed_lessons()
+        bought = self.client.post(
+            "/api/growth/workshop/purchase", json={"item_key": "owl_scarf"}
+        )
+        self.assertEqual(bought.status_code, 200, bought.text)
+
+        with SessionLocal() as db:
+            owner = db.scalar(select(User).where(User.email == "explorer@example.com"))
+            owner.equipped_owl_accessory = 'javascript:alert("not artwork")'
+            lesson = Lesson(
+                user_id=owner.id,
+                topic_title="A safely shared tangent",
+                topic_blurb="",
+                picked_by="user",
+                status="ready",
+                content_json=json.dumps({"cards": [], "questions": QUESTIONS}),
+                share_token="malformed-owl-profile",
+            )
+            db.add(lesson)
+            db.commit()
+
+        profile = self.client.get("/api/auth/me").json()
+        self.assertIsNone(profile["profile_picture"]["owl"]["accessory"])
+        self.assertIsNone(profile["equipped_cosmetics"]["owl_accessory"])
+
+        shared = self.client.get("/api/shared/malformed-owl-profile")
+        self.assertEqual(shared.status_code, 200, shared.text)
+        self.assertNotIn("author_avatar", shared.json())
+        self.assertIsNone(
+            shared.json()["author_profile_picture"]["owl"]["accessory"]
+        )
+
+        self.client.post("/api/auth/signout")
+        self.signup("second@example.com", "Bea")
+        another_users_item = self.client.post(
+            "/api/growth/workshop/equip", json={"item_key": "owl_scarf"}
+        )
+        self.assertEqual(another_users_item.status_code, 409, another_users_item.text)
+        invalid = self.client.post(
+            "/api/growth/workshop/equip", json={"item_key": "owl_not_real"}
+        )
+        self.assertEqual(invalid.status_code, 404, invalid.text)
 
     def test_weekly_boss_is_first_attempt_only(self):
         self.signup()
@@ -268,6 +347,13 @@ class GrowthApiTests(unittest.TestCase):
     def test_private_circle_requires_invite_and_tracks_members(self):
         self.signup(name="Ari")
         self.completed_lessons()
+        avatar = self.client.patch("/api/auth/me", json={"avatar": TINY_AVATAR})
+        self.assertEqual(avatar.status_code, 200, avatar.text)
+        bought = self.client.post(
+            "/api/growth/workshop/purchase",
+            json={"item_key": "owl_scholar_cap"},
+        )
+        self.assertEqual(bought.status_code, 200, bought.text)
         blank = self.client.post("/api/growth/circles", json={"name": "  "})
         self.assertEqual(blank.status_code, 422, blank.text)
         created = self.client.post(
@@ -281,6 +367,13 @@ class GrowthApiTests(unittest.TestCase):
 
         self.client.post("/api/auth/signout")
         self.signup("second@example.com", "Bea")
+        self.completed_lessons("second@example.com")
+        avatar = self.client.patch("/api/auth/me", json={"avatar": TINY_AVATAR})
+        self.assertEqual(avatar.status_code, 200, avatar.text)
+        bought = self.client.post(
+            "/api/growth/workshop/purchase", json={"item_key": "owl_bow"}
+        )
+        self.assertEqual(bought.status_code, 200, bought.text)
         denied = self.client.post(
             "/api/growth/circles/join", json={"invite_code": "not-a-real-code"}
         )
@@ -296,10 +389,21 @@ class GrowthApiTests(unittest.TestCase):
         self.assertEqual(
             {member["display_name"] for member in mine["members"]}, {"Ari", "Bea"}
         )
+        by_name = {member["display_name"]: member for member in mine["members"]}
+        self.assertEqual(
+            by_name["Ari"]["profile_picture"]["owl"]["accessory"],
+            "owl_scholar_cap",
+        )
+        self.assertEqual(
+            by_name["Bea"]["profile_picture"]["owl"]["accessory"], "owl_bow"
+        )
         for member in mine["members"]:
             self.assertNotIn("rank", member)
             self.assertNotIn("user_id", member)
             self.assertNotIn("email", member)
+            self.assertNotIn("avatar", member)
+            self.assertNotIn("coins", member)
+            self.assertNotIn("owned", member)
             self.assertEqual(member["contribution"], 0)
 
         left = self.client.post(f"/api/growth/circles/{circle_id}/leave")

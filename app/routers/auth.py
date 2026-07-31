@@ -17,6 +17,7 @@ from ..config import (
     RESET_TTL_MINUTES,
     SESSION_DAYS,
 )
+from ..cosmetics import equipped_cosmetics, owl_profile_picture
 from ..db import get_db
 from ..gamification import catalog, streak_status, wallet
 from ..models import (
@@ -133,6 +134,7 @@ def _profile(user: User, db: OrmSession | None = None) -> dict:
         "streak_status": streak_status(user),
         "daily_lesson_cap": DAILY_LESSON_CAP,
         "avatar": user.avatar,
+        "profile_picture": owl_profile_picture(user),
         "bio": user.bio or "",
         "accent": user.accent or "",
         # Default on: an empty library helps nobody, and topics are subject
@@ -145,12 +147,7 @@ def _profile(user: User, db: OrmSession | None = None) -> dict:
         "theme": user.theme or "system",
         "timezone": user.timezone or "",
         "default_level": user.default_level or 5,
-        "equipped_cosmetics": {
-            "owl_accessory": user.equipped_owl_accessory,
-            "desk_item": user.equipped_desk_item,
-            "card_theme": user.equipped_card_theme,
-            "celebration": user.equipped_celebration,
-        },
+        "equipped_cosmetics": equipped_cosmetics(user),
     }
     if db is not None:
         from .learn import used_today  # local import avoids a circular import
@@ -363,6 +360,7 @@ def export_data(user: User = Depends(current_user), db: OrmSession = Depends(get
             "accent": user.accent,
             "timezone": user.timezone,
             "has_avatar": bool(user.avatar),
+            "profile_picture": owl_profile_picture(user),
             "created_at": user.created_at.isoformat() if user.created_at else None,
             "xp": user.xp,
             "current_streak": user.current_streak,
@@ -421,12 +419,7 @@ def export_data(user: User = Depends(current_user), db: OrmSession = Depends(get
                 if user.last_constellation_visit
                 else None
             ),
-            "equipped": {
-                "owl_accessory": user.equipped_owl_accessory,
-                "desk_item": user.equipped_desk_item,
-                "card_theme": user.equipped_card_theme,
-                "celebration": user.equipped_celebration,
-            },
+            "equipped": equipped_cosmetics(user),
             "review_progress": [
                 {
                     "lesson_id": row.lesson_id,
