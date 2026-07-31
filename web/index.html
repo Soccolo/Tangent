@@ -4,8 +4,12 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#161826">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Tangent">
   <title>Tangent — learn the ring around your job</title>
   <link rel="icon" href="/static/owl.svg">
+  <link rel="manifest" href="/static/manifest.webmanifest">
   <script>
     /* Resolve the theme before the stylesheet paints, or the app flashes dark
        on the way to light. "system" is resolved here rather than in CSS so the
@@ -29,12 +33,16 @@
   <div class="shell">
     <header class="top">
       <button class="home" id="homeBtn" title="Back to today" aria-label="Tangent — back to today">
-        <img class="owl" src="/static/owl.svg" alt="">
+        <span class="home-owl owl" id="homeOwl" aria-hidden="true"></span>
         <span class="wordmark">Tangent</span>
       </button>
       <span class="spacer"></span>
-      <span class="stat flame hidden" id="streakStat">🔥 <span id="streakNum">0</span></span>
-      <span class="stat hidden" id="xpStat">⭐ <span id="xpNum">0</span></span>
+      <button class="stat flame hidden" id="streakStat" title="Open streak rewards"
+        aria-label="Open streak rewards">🔥 <span id="streakNum">0</span></button>
+      <button class="stat coin hidden" id="coinStat" title="Open your rewards"
+        aria-label="Open rewards"><span class="coin-mini" aria-hidden="true">T</span> <span id="coinNum">0</span></button>
+      <button class="stat hidden" id="xpStat" title="Open progress"
+        aria-label="Open progress">⭐ <span id="xpNum">0</span></button>
       <button class="avatar-btn hidden" id="avatarBtn" title="Your profile" aria-label="Your profile"></button>
       <button class="btn ghost small hidden" id="logoutBtn">Log out</button>
     </header>
@@ -44,7 +52,9 @@
 
   <nav class="tabs hidden" id="tabs">
     <button data-tab="today">Today</button>
+    <button data-tab="explore">Explore</button>
     <button data-tab="library">Library</button>
+    <button data-tab="rewards">Rewards</button>
     <button data-tab="progress">Progress</button>
     <button data-tab="profile">Profile</button>
   </nav>

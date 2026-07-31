@@ -11,7 +11,8 @@ Price a solicitors' PI claim all day and Tangent offers you limitation periods, 
 underwriter's side of the same risk, or gradient boosting on sparse claims data.
 You pick one. **Tangent picks the second — deliberately from somewhere else.**
 Then it writes both as short interactive lessons: concept cards with diagrams, then
-questions with real explanations. Streaks, XP and levels keep you coming back.
+questions with real explanations. Streaks, XP, levels and earned Tangent coins keep
+you coming back without turning learning into pay-to-win.
 
 ## Running it
 
@@ -56,12 +57,61 @@ get one right, and winces when you don't. Speech is typed out a word at a time �
 skipped entirely under `prefers-reduced-motion`, since a typewriter is decoration and
 decoration shouldn't be the only way to receive information.
 
-**New accounts meet Tangent before they meet the dashboard.** A seven-step intro
-introduces the owl by name, explains the idea in three beats, then asks what you do,
-what you wish you understood better, and what would make this worth your time. The last
-two feed the topic prompt directly — the answers steer which adjacent topics get
-favoured, without ever pulling suggestions away from what you actually did that day.
-Skippable, and replayable from Profile.
+**New accounts meet Tangent before they meet the dashboard.** A seven-step visual tour
+shows the real loop — logging or capture, six adjacent directions, the two picks,
+visual lessons, questions, hints, sharing, progress and rewards — then asks what you
+do, what you wish you understood better, and what would make this worth your time. The
+last two feed the topic prompt directly. The feature tour is skippable, but the role
+setup is not; everything is replayable from Profile.
+
+## Explore: range, recall and small-group momentum
+
+The Explore tab turns completed lessons into a longer learning loop:
+
+- **Tangent Constellation** puts the learner's role at the centre and lights up
+  completed topics around domain, technical, regulatory, commercial and frontier
+  rings. It is a map of breadth, not a syllabus or a leaderboard.
+- **Three-minute review** serves up to three due questions without sending the
+  answers to the browser. Correct answers move out on an expanding interval; a miss
+  comes back the next day. A question cannot be replayed immediately to farm coins.
+- **Daily missions** reward one new lesson, three due reviews and a Constellation
+  visit. Each reward has a unique server-side claim, so retries cannot mint it twice.
+- **The weekly scenario** combines two completed subjects into one practical decision.
+  It is instant and deterministic rather than another model call, and can only be
+  attempted once per week.
+- **Owl Workshop** is a cosmetic coin sink. Bought accessories, card treatments and
+  celebration styles are owned and equipped on the server, then applied across
+  devices.
+- **Private circles** use an invite code and a shared weekly activity goal. Members
+  can see one another's contribution to that goal, but there is no public discovery
+  or global ranking.
+
+The engagement layer remains earned-only: it adds reasons to return and practise, but
+does not sell progress or turn workplace learning into competition with strangers.
+
+## Rewards, hints and streak freezes
+
+XP still controls levels; coins are the separate spendable loop. Every new lesson
+completion earns 10 coins plus 3 per correct answer and an 8-coin clean-sweep bonus.
+Reviews never mint a second reward. New and existing accounts receive 30 starter coins
+and one sample hint.
+
+The Rewards tab is entirely server-backed:
+
+| Item | Cost | What it does |
+| --- | ---: | --- |
+| Question hint | 15 coins | Removes one wrong option. A stored per-question record makes retries free and reopening the lesson shows the same hint. |
+| Streak freeze | 90 coins | Automatically covers one missed local-calendar day on the next completion. Users can carry two. |
+
+Purchases debit and add inventory in one conditional database update, and first
+completion is claimed atomically, so a double click or network retry cannot duplicate
+coins. Streaks use the browser's saved IANA timezone instead of the deployment
+server's day. Coins are earned only; there is no real-money purchase path.
+
+The PWA shell (`manifest.webmanifest` + `sw.js`) makes the web app installable and
+caches only static UI assets. Authenticated API responses are deliberately
+network-only. For the native-store route and current submission checklist, see
+[MOBILE_RELEASE.md](MOBILE_RELEASE.md).
 
 ## The shared library
 
@@ -93,7 +143,7 @@ the lesson and its topic are shared — never the activity log that produced the
 | --- | --- |
 | Password reset | `/api/auth/forgot` → emailed link → `/reset/<token>`. Single-use, 60-minute expiry, and using it signs out every other session. Known and unknown addresses get **identical** responses, so the endpoint can't be used to test which emails are registered. |
 | Data export | `GET /api/auth/me/export` returns everything held — profile, activities, observations, digests and full lesson content — as a downloadable JSON file (GDPR Art. 20). |
-| Account deletion | `POST /api/auth/me/delete`, confirmed with the current password so a stolen session isn't enough. Removes the account and all its data. Library contributions stay but are unlinked from the author; lessons other people copied survive with the author's name intact and the foreign key nulled. |
+| Account deletion | `POST /api/auth/me/delete`, confirmed with the current password so a stolen session isn't enough. Removes the account and all its data. Library contributions and lessons copied by other people survive, but both the author link and display-name attribution are removed. |
 | Rate limiting | Sign-in is limited per IP *and* per email — one machine spraying many accounts and many machines converging on one account are different attacks. Sign-up, forgot and reset are limited too. Responses carry `Retry-After`. |
 | Session expiry | Sessions now carry `expires_at` (90 days, `TANGENT_SESSION_DAYS`) and are deleted on expiry. Rows predating the column fall back to `created_at + TTL`. |
 

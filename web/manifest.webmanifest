@@ -1,0 +1,20 @@
+{
+  "id": "/",
+  "name": "Tangent — learn around your work",
+  "short_name": "Tangent",
+  "description": "Turn today's work into short lessons in the subjects sitting next to it.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#161826",
+  "theme_color": "#161826",
+  "categories": ["education", "productivity"],
+  "icons": [
+    {
+      "src": "/static/owl.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

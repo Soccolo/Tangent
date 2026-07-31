@@ -188,6 +188,7 @@ def add_to_my_lessons(
         user_id=user.id,
         topic_title=entry.title,
         topic_blurb=entry.blurb,
+        category=entry.category or None,
         picked_by="library",
         content_json=json.dumps(content),
         status="ready",

@@ -8,12 +8,22 @@ the app before you hand over a key.
 
 import json
 import sys
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 
-from sqlalchemy import select
+from sqlalchemy import delete, or_, select
 
-from app.db import Base, SessionLocal, engine
-from app.models import Activity, Digest, Lesson, User
+from app.db import Base, SessionLocal, engine, ensure_schema
+from app.models import (
+    BossAttempt,
+    HintUse,
+    Lesson,
+    ReviewAttempt,
+    ReviewProgress,
+    RewardClaim,
+    Activity,
+    Digest,
+    User,
+)
 from app.security import hash_password
 
 TOPICS = [
@@ -179,6 +189,7 @@ LESSON = {
 def main() -> None:
     email = (sys.argv[1] if len(sys.argv) > 1 else "demo@tangent.local").lower()
     Base.metadata.create_all(engine)
+    ensure_schema()
     db = SessionLocal()
 
     user = db.scalar(select(User).where(User.email == email))
@@ -193,6 +204,14 @@ def main() -> None:
         db.commit()
         db.refresh(user)
         print(f"Created {email} with password 'demodemo'")
+
+    # Enough inventory to try every part of the reward loop during a demo.
+    user.coins = 150
+    user.hint_tokens = 2
+    user.streak_freezes = 1
+    user.timezone = user.timezone or "Europe/London"
+    user.xp = max(int(user.xp or 0), 180)
+    user.last_constellation_visit = None
 
     today = date.today()
     if not db.scalar(
@@ -214,13 +233,40 @@ def main() -> None:
     db.commit()
     db.refresh(digest)
 
-    for lesson in db.scalars(select(Lesson).where(Lesson.digest_id == digest.id)):
+    old_lessons = db.scalars(
+        select(Lesson).where(
+            or_(
+                Lesson.digest_id == digest.id,
+                (Lesson.user_id == user.id) & (Lesson.picked_by == "demo"),
+            )
+        )
+    ).all()
+    old_ids = [lesson.id for lesson in old_lessons]
+    if old_ids:
+        db.execute(delete(HintUse).where(HintUse.lesson_id.in_(old_ids)))
+        db.execute(delete(ReviewAttempt).where(ReviewAttempt.lesson_id.in_(old_ids)))
+        db.execute(delete(ReviewProgress).where(ReviewProgress.lesson_id.in_(old_ids)))
+    for lesson in old_lessons:
         db.delete(lesson)
+    db.execute(
+        delete(RewardClaim).where(
+            RewardClaim.user_id == user.id,
+            RewardClaim.key.like(f"mission:{today.isoformat()}:%"),
+        )
+    )
+    week_key = (today - timedelta(days=today.weekday())).isoformat()
+    db.execute(
+        delete(BossAttempt).where(
+            BossAttempt.user_id == user.id,
+            BossAttempt.week_key == week_key,
+        )
+    )
     db.commit()
 
     db.add(Lesson(
         user_id=user.id, digest_id=digest.id,
         topic_title=TOPICS[0]["title"], topic_blurb=TOPICS[0]["blurb"],
+        category=TOPICS[0]["category"],
         picked_by="user", content_json=json.dumps(LESSON),
         total_questions=len(LESSON["questions"]), status="ready",
     ))
@@ -229,8 +275,48 @@ def main() -> None:
     db.add(Lesson(
         user_id=user.id, digest_id=digest.id,
         topic_title=TOPICS[2]["title"], topic_blurb=TOPICS[2]["blurb"],
+        category=TOPICS[2]["category"],
         picked_by="app", content_json="", status="pending",
     ))
+
+    # Two historical completions unlock the weekly scenario; three questions
+    # from one are due now so the three-minute review and mission are demoable.
+    now = datetime.now(timezone.utc)
+    history = []
+    for offset, topic_index in ((2, 1), (4, 3)):
+        topic = TOPICS[topic_index]
+        content = dict(LESSON)
+        content["title"] = topic["title"]
+        lesson = Lesson(
+            user_id=user.id,
+            digest_id=None,
+            topic_title=topic["title"],
+            topic_blurb=topic["blurb"],
+            category=topic["category"],
+            picked_by="demo",
+            content_json=json.dumps(content),
+            status="ready",
+            completed=True,
+            score=2,
+            total_questions=len(LESSON["questions"]),
+            xp_awarded=25,
+            coins_awarded=16,
+            created_at=now - timedelta(days=offset),
+            completed_at=now - timedelta(days=offset),
+        )
+        db.add(lesson)
+        history.append(lesson)
+    db.flush()
+    for question_index in range(min(3, len(LESSON["questions"]))):
+        db.add(
+            ReviewProgress(
+                user_id=user.id,
+                lesson_id=history[0].id,
+                question_index=question_index,
+                due_day=today,
+                interval_days=1,
+            )
+        )
     db.commit()
     print(f"Seeded today's digest and lessons for {email}")
 

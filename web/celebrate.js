@@ -15,19 +15,39 @@
 
   var LEVEL_KEY = "tangent.lastLevel";
   var COLORS = ["#9184d9", "#b5abfc", "#d2cefd", "#e8b657", "#a7a1db", "#7c6fc7"];
+  var VARIANT_COLORS = {
+    stars: ["#f2c45f", "#fff0a8", "#b5abfc", "#e8b657"],
+    bubbles: ["#86dcd6", "#bff0ec", "#b5abfc", "#ffd0e0"],
+    fireflies: ["#7ee0a8", "#dff5bf", "#f2c45f", "#fff0a8"],
+    leaves: ["#7ee0a8", "#9cc267", "#c2e592", "#5cb5b0"],
+  };
 
   var reduced = window.matchMedia
     && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-  function burst(count) {
+  function equippedVariant() {
+    var key = String(document.documentElement.dataset.celebrationCosmetic || "").toLowerCase();
+    if (key.indexOf("star") !== -1 || key.indexOf("spark") !== -1) return "stars";
+    if (key.indexOf("bubble") !== -1) return "bubbles";
+    if (key.indexOf("fire") !== -1 || key.indexOf("glow") !== -1) return "fireflies";
+    if (key.indexOf("leaf") !== -1 || key.indexOf("forest") !== -1) return "leaves";
+    return "confetti";
+  }
+
+  function burst(count, requestedVariant) {
     if (reduced) return;
-    for (var i = 0; i < count; i++) {
+    var variant = requestedVariant || equippedVariant();
+    var colors = VARIANT_COLORS[variant] || COLORS;
+    layer.dataset.variant = variant;
+    var total = Math.max(1, Math.min(140, Number(count) || 48));
+    for (var i = 0; i < total; i++) {
       var piece = document.createElement("i");
       var w = 6 + Math.random() * 9;
       piece.style.left = (Math.random() * 100) + "%";
       piece.style.width = w + "px";
       piece.style.height = (w * 0.55) + "px";
-      piece.style.background = COLORS[i % COLORS.length];
+      piece.style.background = colors[i % colors.length];
+      piece.style.color = colors[i % colors.length];
       piece.style.animationDuration = (1.7 + Math.random() * 1.5) + "s";
       piece.style.animationDelay = (Math.random() * 0.45) + "s";
       layer.appendChild(piece);
@@ -53,11 +73,13 @@
     try { localStorage.setItem(LEVEL_KEY, String(level)); } catch (e) { /* private mode */ }
   }
 
-  /* The finish screen renders three .reward tiles: XP earned, streak, level. */
+  /* Reward tiles are named because the finish screen can grow without making
+     level detection depend on a fragile visual position. */
   function celebrate(card) {
-    var tiles = card.querySelectorAll(".reward .n");
-    var awarded = tiles.length > 0 ? num(tiles[0].textContent) : null;
-    var level = tiles.length > 2 ? num(tiles[2].textContent) : null;
+    var xpTile = card.querySelector('[data-reward="xp"] .n');
+    var levelTile = card.querySelector('[data-reward="level"] .n');
+    var awarded = xpTile ? num(xpTile.textContent) : null;
+    var level = levelTile ? num(levelTile.textContent) : null;
 
     var score = card.querySelector(".bigscore");
     var parts = score ? String(score.textContent).split("/") : [];
@@ -116,5 +138,6 @@
   }
 
   new MutationObserver(check).observe(view, { childList: true, subtree: true });
+  window.TangentCelebrate = { burst: burst };
   check();
 })();

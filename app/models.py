@@ -46,6 +46,9 @@ class User(Base):
     onboarded_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     # "system" | "light" | "dark". Null means system.
     theme: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    # Browser-reported IANA name (for example Europe/London). Streak days use
+    # this rather than the deployment server's calendar.
+    timezone: Mapped[str | None] = mapped_column(String(64), nullable=True)
     # Default self-rated knowledge, 1-10, used to pre-set the per-lesson slider.
     default_level: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
@@ -54,6 +57,20 @@ class User(Base):
     current_streak: Mapped[int] = mapped_column(Integer, default=0)
     longest_streak: Mapped[int] = mapped_column(Integer, default=0)
     last_active_day: Mapped[date | None] = mapped_column(Date, nullable=True)
+    # Nullable is intentional for additive migration: a NULL on an older row
+    # means "starter balance", while a real zero means the user spent it.
+    coins: Mapped[int | None] = mapped_column(Integer, default=30, nullable=True)
+    hint_tokens: Mapped[int | None] = mapped_column(Integer, default=1, nullable=True)
+    streak_freezes: Mapped[int | None] = mapped_column(Integer, default=0, nullable=True)
+    # Growth features stay additive for existing databases. A date is enough:
+    # visiting the constellation is a once-per-local-day mission, not analytics.
+    last_constellation_visit: Mapped[date | None] = mapped_column(Date, nullable=True)
+    # Cosmetic identifiers come exclusively from the server-owned workshop
+    # catalogue. They are asset keys, never user-authored markup or URLs.
+    equipped_owl_accessory: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    equipped_desk_item: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    equipped_card_theme: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    equipped_celebration: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     activities: Mapped[list["Activity"]] = relationship(back_populates="user")
     lessons: Mapped[list["Lesson"]] = relationship(back_populates="user")
@@ -180,6 +197,10 @@ class Lesson(Base):
     digest_id: Mapped[int | None] = mapped_column(ForeignKey("digests.id"), nullable=True)
     topic_title: Mapped[str] = mapped_column(String(255))
     topic_blurb: Mapped[str] = mapped_column(Text, default="")
+    # Nullable for already-deployed lesson rows. New lessons copy the category
+    # from their digest/library/source so the constellation does not need to
+    # reverse-engineer the topic later.
+    category: Mapped[str | None] = mapped_column(String(32), nullable=True)
     picked_by: Mapped[str] = mapped_column(String(16), default="user")  # user | app
     content_json: Mapped[str] = mapped_column(Text)
     # pending | generating | ready | failed. Generation runs in the background so
@@ -190,6 +211,8 @@ class Lesson(Base):
     score: Mapped[int] = mapped_column(Integer, default=0)
     total_questions: Mapped[int] = mapped_column(Integer, default=0)
     xp_awarded: Mapped[int] = mapped_column(Integer, default=0)
+    # Older completed lessons get no retroactive payout; NULL reads as zero.
+    coins_awarded: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
@@ -211,3 +234,155 @@ class Lesson(Base):
     placement_json: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     user: Mapped[User] = relationship(back_populates="lessons")
+
+
+class HintUse(Base):
+    """One paid hint per lesson question.
+
+    The uniqueness constraint makes the endpoint idempotent: retries return the
+    same eliminated answer rather than spending a second token.
+    """
+
+    __tablename__ = "hint_uses"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id", "lesson_id", "question_index", name="uq_hint_user_lesson_question"
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    lesson_id: Mapped[int] = mapped_column(ForeignKey("lessons.id"), index=True)
+    question_index: Mapped[int] = mapped_column(Integer)
+    eliminated_index: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class ReviewProgress(Base):
+    """The next due date for one question from one of the user's lessons."""
+
+    __tablename__ = "review_progress"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id",
+            "lesson_id",
+            "question_index",
+            name="uq_review_progress_user_lesson_question",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    lesson_id: Mapped[int] = mapped_column(ForeignKey("lessons.id"), index=True)
+    question_index: Mapped[int] = mapped_column(Integer)
+    due_day: Mapped[date] = mapped_column(Date, index=True)
+    interval_days: Mapped[int] = mapped_column(Integer, default=1)
+    repetitions: Mapped[int] = mapped_column(Integer, default=0)
+    last_reviewed_day: Mapped[date | None] = mapped_column(Date, nullable=True)
+    last_correct: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class ReviewAttempt(Base):
+    """One server-graded due-question attempt.
+
+    A user/question/day unique key is both the activity history used by circles
+    and the idempotency guard that prevents review-reward farming.
+    """
+
+    __tablename__ = "review_attempts"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id",
+            "lesson_id",
+            "question_index",
+            "review_day",
+            name="uq_review_attempt_user_question_day",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    lesson_id: Mapped[int] = mapped_column(ForeignKey("lessons.id"), index=True)
+    question_index: Mapped[int] = mapped_column(Integer)
+    review_day: Mapped[date] = mapped_column(Date, index=True)
+    answer_index: Mapped[int] = mapped_column(Integer)
+    correct: Mapped[bool] = mapped_column(Boolean)
+    reward: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class RewardClaim(Base):
+    """A one-off coin award, keyed by its user and immutable period key."""
+
+    __tablename__ = "reward_claims"
+    __table_args__ = (
+        UniqueConstraint("user_id", "key", name="uq_reward_claim_user_key"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    key: Mapped[str] = mapped_column(String(160))
+    reward: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class BossAttempt(Base):
+    """The first and only answer to a user's deterministic weekly scenario."""
+
+    __tablename__ = "boss_attempts"
+    __table_args__ = (
+        UniqueConstraint("user_id", "week_key", name="uq_boss_attempt_user_week"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    week_key: Mapped[str] = mapped_column(String(10), index=True)
+    # Freeze the public scenario so another completion cannot change a question
+    # between rendering it and grading it.
+    scenario_key: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    scenario_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    answer_index: Mapped[int] = mapped_column(Integer)
+    correct: Mapped[bool] = mapped_column(Boolean)
+    reward: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class CosmeticUnlock(Base):
+    """Ownership of one server-catalogued workshop item."""
+
+    __tablename__ = "cosmetic_unlocks"
+    __table_args__ = (
+        UniqueConstraint("user_id", "item_key", name="uq_cosmetic_unlock_user_item"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    item_key: Mapped[str] = mapped_column(String(64))
+    purchased_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class Circle(Base):
+    """A private, invite-only group with one small collaborative weekly goal."""
+
+    __tablename__ = "circles"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(80))
+    invite_code: Mapped[str] = mapped_column(String(32), unique=True, index=True)
+    created_by_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    weekly_goal: Mapped[int] = mapped_column(Integer, default=12)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class CircleMember(Base):
+    __tablename__ = "circle_members"
+    __table_args__ = (
+        UniqueConstraint("circle_id", "user_id", name="uq_circle_member_circle_user"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    circle_id: Mapped[int] = mapped_column(ForeignKey("circles.id"), index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    joined_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

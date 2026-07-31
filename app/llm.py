@@ -403,11 +403,18 @@ Assume intelligence, not knowledge: never condescend, and never leave a step imp
 because it feels obvious to you. Don't flatter, don't hedge, don't pad."""
 
 
-def suggest_topics(role: str, activities: list[str]) -> dict:
+def suggest_topics(
+    role: str,
+    activities: list[str],
+    learning_goals: str = "",
+    aim: str = "",
+) -> dict:
     """Turn a day's activity log into six adjacent topics."""
     activity_block = "\n".join(f"- {a}" for a in activities) or "- (nothing logged)"
     prompt = (
         f"The person describes their role as: {role or 'not specified'}\n\n"
+        f"They would especially like to understand: {learning_goals or 'no preference'}\n"
+        f"What would make learning worthwhile: {aim or 'not specified'}\n\n"
         f"What they worked on / searched for today:\n{activity_block}\n\n"
         "Give me the day's summary and six adjacent topics."
     )
