@@ -3,12 +3,12 @@ import logging
 import re
 
 from fastapi import FastAPI
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from .config import WEB_DIR
 from .db import Base, engine, ensure_schema
-from .routers import auth, capture, learn, library
+from .routers import auth, capture, growth, learn, library, rewards
 
 logging.basicConfig(level=logging.INFO)
 
@@ -21,6 +21,8 @@ app.include_router(auth.router)
 app.include_router(learn.router)
 app.include_router(capture.router)
 app.include_router(library.router)
+app.include_router(rewards.router)
+app.include_router(growth.router)
 
 app.mount("/static", StaticFiles(directory=WEB_DIR), name="static")
 
@@ -28,6 +30,20 @@ app.mount("/static", StaticFiles(directory=WEB_DIR), name="static")
 @app.get("/healthz", include_in_schema=False)
 def healthz():
     return {"ok": True}
+
+
+@app.get("/sw.js", include_in_schema=False)
+def service_worker():
+    source = (WEB_DIR / "sw.js").read_text(encoding="utf-8")
+    source = source.replace("__ASSET_VERSION__", ASSET_VERSION)
+    return Response(
+        content=source,
+        media_type="application/javascript",
+        headers={
+            "Cache-Control": "no-cache",
+            "Service-Worker-Allowed": "/",
+        },
+    )
 
 
 def _asset_version() -> str:

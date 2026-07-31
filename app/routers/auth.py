@@ -3,6 +3,7 @@ import binascii
 import json
 import logging
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy import delete, select
@@ -17,14 +18,23 @@ from ..config import (
     SESSION_DAYS,
 )
 from ..db import get_db
+from ..gamification import catalog, streak_status, wallet
 from ..models import (
     Activity,
+    BossAttempt,
+    Circle,
+    CircleMember,
+    CosmeticUnlock,
     Digest,
     Generation,
+    HintUse,
     Lesson,
     LibraryLesson,
     Observation,
     PasswordReset,
+    ReviewAttempt,
+    ReviewProgress,
+    RewardClaim,
     Session,
     User,
 )
@@ -118,6 +128,9 @@ def _profile(user: User, db: OrmSession | None = None) -> dict:
         "xp_into_level": user.xp % 100,
         "current_streak": user.current_streak,
         "longest_streak": user.longest_streak,
+        **wallet(user),
+        "reward_catalog": catalog(),
+        "streak_status": streak_status(user),
         "daily_lesson_cap": DAILY_LESSON_CAP,
         "avatar": user.avatar,
         "bio": user.bio or "",
@@ -130,7 +143,14 @@ def _profile(user: User, db: OrmSession | None = None) -> dict:
         "aim": user.aim or "",
         "onboarded": user.onboarded_at is not None,
         "theme": user.theme or "system",
+        "timezone": user.timezone or "",
         "default_level": user.default_level or 5,
+        "equipped_cosmetics": {
+            "owl_accessory": user.equipped_owl_accessory,
+            "desk_item": user.equipped_desk_item,
+            "card_theme": user.equipped_card_theme,
+            "celebration": user.equipped_celebration,
+        },
     }
     if db is not None:
         from .learn import used_today  # local import avoids a circular import
@@ -312,6 +332,16 @@ def update_me(
         user.onboarded_at = user.onboarded_at or datetime.utcnow()
     if body.theme in {"system", "light", "dark"}:
         user.theme = body.theme
+    if body.timezone is not None:
+        candidate = body.timezone.strip()
+        if candidate:
+            try:
+                ZoneInfo(candidate)
+            except (ZoneInfoNotFoundError, ValueError) as exc:
+                raise HTTPException(
+                    status.HTTP_400_BAD_REQUEST, "That timezone isn't recognised."
+                ) from exc
+            user.timezone = candidate
     if body.default_level is not None:
         user.default_level = max(1, min(10, body.default_level))
 
@@ -331,11 +361,13 @@ def export_data(user: User = Depends(current_user), db: OrmSession = Depends(get
             "role": user.role,
             "bio": user.bio,
             "accent": user.accent,
+            "timezone": user.timezone,
             "has_avatar": bool(user.avatar),
             "created_at": user.created_at.isoformat() if user.created_at else None,
             "xp": user.xp,
             "current_streak": user.current_streak,
             "longest_streak": user.longest_streak,
+            **wallet(user),
         },
         "activities": [
             {"day": a.day.isoformat(), "text": a.text, "source": a.source}
@@ -359,19 +391,135 @@ def export_data(user: User = Depends(current_user), db: OrmSession = Depends(get
             }
             for d in db.scalars(select(Digest).where(Digest.user_id == user.id))
         ],
+        "hints_used": [
+            {
+                "lesson_id": hint.lesson_id,
+                "question_index": hint.question_index,
+                "eliminated_index": hint.eliminated_index,
+                "created_at": hint.created_at.isoformat() if hint.created_at else None,
+            }
+            for hint in db.scalars(select(HintUse).where(HintUse.user_id == user.id))
+        ],
         "lessons": [
             {
                 "title": lesson.topic_title,
+                "category": lesson.category,
                 "picked_by": lesson.picked_by,
                 "completed": lesson.completed,
                 "score": lesson.score,
                 "total_questions": lesson.total_questions,
                 "xp_awarded": lesson.xp_awarded,
+                "coins_awarded": lesson.coins_awarded or 0,
                 "created_at": lesson.created_at.isoformat() if lesson.created_at else None,
                 "content": json.loads(lesson.content_json) if lesson.content_json else None,
             }
             for lesson in lessons
         ],
+        "growth": {
+            "last_constellation_visit": (
+                user.last_constellation_visit.isoformat()
+                if user.last_constellation_visit
+                else None
+            ),
+            "equipped": {
+                "owl_accessory": user.equipped_owl_accessory,
+                "desk_item": user.equipped_desk_item,
+                "card_theme": user.equipped_card_theme,
+                "celebration": user.equipped_celebration,
+            },
+            "review_progress": [
+                {
+                    "lesson_id": row.lesson_id,
+                    "question_index": row.question_index,
+                    "due_day": row.due_day.isoformat(),
+                    "interval_days": row.interval_days,
+                    "repetitions": row.repetitions,
+                    "last_reviewed_day": (
+                        row.last_reviewed_day.isoformat()
+                        if row.last_reviewed_day
+                        else None
+                    ),
+                    "last_correct": row.last_correct,
+                    "created_at": row.created_at.isoformat() if row.created_at else None,
+                    "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+                }
+                for row in db.scalars(
+                    select(ReviewProgress).where(ReviewProgress.user_id == user.id)
+                )
+            ],
+            "review_attempts": [
+                {
+                    "lesson_id": row.lesson_id,
+                    "question_index": row.question_index,
+                    "review_day": row.review_day.isoformat(),
+                    "answer_index": row.answer_index,
+                    "correct": row.correct,
+                    "reward": row.reward,
+                    "created_at": row.created_at.isoformat() if row.created_at else None,
+                }
+                for row in db.scalars(
+                    select(ReviewAttempt).where(ReviewAttempt.user_id == user.id)
+                )
+            ],
+            "reward_claims": [
+                {
+                    "key": row.key,
+                    "reward": row.reward,
+                    "created_at": row.created_at.isoformat() if row.created_at else None,
+                }
+                for row in db.scalars(
+                    select(RewardClaim).where(RewardClaim.user_id == user.id)
+                )
+            ],
+            "boss_attempts": [
+                {
+                    "week_key": row.week_key,
+                    "scenario_key": row.scenario_key,
+                    "scenario": (
+                        json.loads(row.scenario_json)
+                        if row.scenario_json
+                        else None
+                    ),
+                    "answer_index": row.answer_index,
+                    "correct": row.correct,
+                    "reward": row.reward,
+                    "created_at": row.created_at.isoformat() if row.created_at else None,
+                }
+                for row in db.scalars(
+                    select(BossAttempt).where(BossAttempt.user_id == user.id)
+                )
+            ],
+            "cosmetics": [
+                {
+                    "item_key": row.item_key,
+                    "purchased_at": (
+                        row.purchased_at.isoformat() if row.purchased_at else None
+                    ),
+                }
+                for row in db.scalars(
+                    select(CosmeticUnlock).where(CosmeticUnlock.user_id == user.id)
+                )
+            ],
+            "circles": [
+                {
+                    "circle_id": membership.circle_id,
+                    "name": circle.name,
+                    "invite_code": circle.invite_code,
+                    "weekly_goal": circle.weekly_goal,
+                    "owner": circle.created_by_user_id == user.id,
+                    "joined_at": (
+                        membership.joined_at.isoformat()
+                        if membership.joined_at
+                        else None
+                    ),
+                }
+                for membership, circle in db.execute(
+                    select(CircleMember, Circle)
+                    .join(Circle, Circle.id == CircleMember.circle_id)
+                    .where(CircleMember.user_id == user.id)
+                )
+            ],
+        },
     }
     filename = f"tangent-export-{datetime.utcnow():%Y-%m-%d}.json"
     return Response(
@@ -394,25 +542,99 @@ def delete_account(
 
     user_id = user.id
 
-    # Lessons other people copied from this user outlive the account. Break the
-    # foreign key but keep author_name, which is already denormalised — credit
-    # survives, the link doesn't dangle.
-    for copy in db.scalars(
-        select(Lesson).where(
-            Lesson.shared_from_id.in_(select(Lesson.id).where(Lesson.user_id == user_id))
-        )
-    ):
-        copy.shared_from_id = None
-
-    # Library contributions stay — other people's lessons point at them — but
-    # are unlinked from the departing author.
-    for entry in db.scalars(
+    # Library contributions stay because other people's lessons point at them.
+    # Collect their ids before unlinking the author so every surviving derived
+    # lesson can be anonymised too.
+    authored_library_entries = db.scalars(
         select(LibraryLesson).where(LibraryLesson.author_user_id == user_id)
-    ):
+    ).all()
+    authored_library_ids = {entry.id for entry in authored_library_entries}
+
+    deleted_lesson_rows = db.execute(
+        select(Lesson.id, Lesson.library_id, Lesson.shared_from_id).where(
+            Lesson.user_id == user_id
+        )
+    ).all()
+    deleted_lesson_ids = {row.id for row in deleted_lesson_rows}
+    authored_source_ids = {
+        row.id
+        for row in deleted_lesson_rows
+        if row.shared_from_id is None
+        and (row.library_id is None or row.library_id in authored_library_ids)
+    }
+    library_copy_ids = (
+        set(
+            db.scalars(
+                select(Lesson.id).where(
+                    Lesson.library_id.in_(authored_library_ids),
+                    Lesson.user_id != user_id,
+                )
+            ).all()
+        )
+        if authored_library_ids
+        else set()
+    )
+
+    # Follow every generation of authored shared/library copies. The explicit
+    # neutral name avoids both retaining personal data and falsely attributing a
+    # surviving copy to its current owner when it is shared again.
+    attribution_seeds = authored_source_ids | library_copy_ids
+    descendant_ids: set[int] = set()
+    frontier = attribution_seeds
+    while frontier:
+        children = set(
+            db.scalars(select(Lesson.id).where(Lesson.shared_from_id.in_(frontier))).all()
+        )
+        frontier = children - descendant_ids - attribution_seeds
+        descendant_ids.update(frontier)
+
+    anonymized_ids = (library_copy_ids | descendant_ids) - deleted_lesson_ids
+    if anonymized_ids:
+        for copy in db.scalars(select(Lesson).where(Lesson.id.in_(anonymized_ids))):
+            copy.author_name = "someone"
+
+    # Every direct edge into a soon-to-be-deleted lesson must be detached,
+    # including a copy that legitimately retains some other author's name.
+    if deleted_lesson_ids:
+        for copy in db.scalars(
+            select(Lesson).where(Lesson.shared_from_id.in_(deleted_lesson_ids))
+        ):
+            copy.shared_from_id = None
+
+    for entry in authored_library_entries:
         entry.author_user_id = None
         entry.author_name = None
     db.flush()
 
+    # A private circle survives its creator when other members remain. Transfer
+    # ownership to the longest-standing remaining member; otherwise remove the
+    # now-empty circle.
+    for circle in db.scalars(
+        select(Circle)
+        .where(Circle.created_by_user_id == user_id)
+        .with_for_update()
+    ).all():
+        successor = db.scalar(
+            select(CircleMember)
+            .where(
+                CircleMember.circle_id == circle.id,
+                CircleMember.user_id != user_id,
+            )
+            .order_by(CircleMember.joined_at, CircleMember.id)
+            .limit(1)
+        )
+        if successor is not None:
+            circle.created_by_user_id = successor.user_id
+        else:
+            db.execute(delete(CircleMember).where(CircleMember.circle_id == circle.id))
+            db.delete(circle)
+    db.execute(delete(CircleMember).where(CircleMember.user_id == user_id))
+    db.execute(delete(ReviewAttempt).where(ReviewAttempt.user_id == user_id))
+    db.execute(delete(ReviewProgress).where(ReviewProgress.user_id == user_id))
+    db.execute(delete(RewardClaim).where(RewardClaim.user_id == user_id))
+    db.execute(delete(BossAttempt).where(BossAttempt.user_id == user_id))
+    db.execute(delete(CosmeticUnlock).where(CosmeticUnlock.user_id == user_id))
+    db.execute(delete(HintUse).where(HintUse.user_id == user_id))
     for model in (Observation, Generation, Activity, Lesson, Digest, PasswordReset, Session):
         db.execute(delete(model).where(model.user_id == user_id))
     db.execute(delete(User).where(User.id == user_id))

@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class SignUp(BaseModel):
@@ -34,6 +34,7 @@ class ProfileUpdate(BaseModel):
     aim: str | None = Field(default=None, max_length=500)
     onboarded: bool | None = None
     theme: str | None = Field(default=None, max_length=16)
+    timezone: str | None = Field(default=None, max_length=64)
     default_level: int | None = Field(default=None, ge=1, le=10)
 
 
@@ -77,3 +78,47 @@ class PlacementAsk(BaseModel):
 
 class AnswerSet(BaseModel):
     answers: list[int]
+
+
+class RewardPurchase(BaseModel):
+    item: str = Field(pattern=r"^(hint|streak_freeze)$")
+
+
+class HintRequest(BaseModel):
+    lesson_id: int = Field(gt=0)
+    question_index: int = Field(ge=0, le=100)
+
+
+class ReviewAnswer(BaseModel):
+    lesson_id: int = Field(gt=0)
+    question_index: int = Field(ge=0, le=100)
+    answer_index: int = Field(ge=0, le=100)
+
+
+class MissionClaim(BaseModel):
+    key: str = Field(min_length=1, max_length=64)
+
+
+class BossAnswer(BaseModel):
+    answer_index: int = Field(ge=0, le=20)
+    scenario_key: str = Field(min_length=8, max_length=32)
+
+
+class WorkshopItemRequest(BaseModel):
+    item_key: str = Field(min_length=1, max_length=64)
+
+
+class CircleCreate(BaseModel):
+    name: str = Field(min_length=2, max_length=80)
+
+    @field_validator("name")
+    @classmethod
+    def normalize_name(cls, value: str) -> str:
+        normalized = " ".join(value.split())
+        if len(normalized) < 2:
+            raise ValueError("Circle names need at least two visible characters.")
+        return normalized
+
+
+class CircleJoin(BaseModel):
+    invite_code: str = Field(min_length=4, max_length=32)

@@ -5,7 +5,7 @@ import secrets
 from datetime import date, datetime, timedelta
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session as OrmSession
 
 from ..config import (
@@ -17,6 +17,16 @@ from ..config import (
     GLOBAL_DAILY_CAP,
 )
 from ..db import SessionLocal, get_db
+from ..gamification import (
+    advance_streak,
+    catalog,
+    coin_balance,
+    lesson_coin_reward,
+    streak_status,
+    user_day,
+    user_today,
+    wallet,
+)
 from ..llm import (
     LLMError,
     generate_lesson,
@@ -24,7 +34,16 @@ from ..llm import (
     shuffle_options,
     suggest_topics,
 )
-from ..models import Activity, Digest, Generation, Lesson, User, utcnow
+from ..models import (
+    Activity,
+    Digest,
+    Generation,
+    HintUse,
+    Lesson,
+    ReviewProgress,
+    User,
+    utcnow,
+)
 from .library import find_match, publish
 from ..schemas import ActivityIn, AnswerSet, ChoosePick, PlacementAsk
 from ..security import current_user
@@ -32,6 +51,16 @@ from ..security import current_user
 log = logging.getLogger("tangent.learn")
 
 router = APIRouter(prefix="/api", tags=["learn"])
+
+
+def _hint_map(db: OrmSession, user_id: int, lesson_id: int) -> dict[str, int]:
+    rows = db.scalars(
+        select(HintUse).where(
+            HintUse.user_id == user_id,
+            HintUse.lesson_id == lesson_id,
+        )
+    ).all()
+    return {str(row.question_index): row.eliminated_index for row in rows}
 
 
 # --------------------------------------------------------------------------- #
@@ -353,6 +382,7 @@ def choose_topic(
                 digest_id=digest.id,
                 topic_title=topic["title"],
                 topic_blurb=topic.get("blurb", ""),
+                category=topic.get("category") or None,
                 picked_by=picked_by,
                 content_json="",
                 level=level,
@@ -409,6 +439,11 @@ def _generate_lesson_job(
             return
         lesson.content_json = json.dumps(content)
         lesson.total_questions = len(content.get("questions", []))
+        lesson.category = (
+            topic.get("category") or lesson.category
+            if isinstance(topic, dict)
+            else lesson.category
+        )
         lesson.status = "ready"
         lesson.generating_since = None
         lesson.error = ""
@@ -460,6 +495,7 @@ def get_lesson(
             "content": json.loads(lesson.content_json),
             "share_token": lesson.share_token,
             "author": lesson.author_name,
+            "hints": _hint_map(db, user.id, lesson.id),
         }
 
     if lesson.status == "generating":
@@ -512,6 +548,7 @@ def get_lesson(
             lesson.total_questions = len(content.get("questions", []))
             lesson.status = "ready"
             lesson.library_id = match.id
+            lesson.category = lesson.category or match.category or None
             lesson.author_name = lesson.author_name or match.author_name
             match.times_used += 1
             db.commit()
@@ -525,6 +562,7 @@ def get_lesson(
                 "content": content,
                 "from_library": True,
                 "author": lesson.author_name,
+                "hints": {},
             }
 
     claim_quota(db, user.id, "lesson")
@@ -537,18 +575,6 @@ def get_lesson(
         _generate_lesson_job, lesson.id, user.role, topic, summary, lesson.level, placement
     )
     return {"id": lesson.id, "status": "generating", "picked_by": lesson.picked_by}
-
-
-def _bump_streak(user: User) -> None:
-    today = date.today()
-    if user.last_active_day == today:
-        return
-    if user.last_active_day == today - timedelta(days=1):
-        user.current_streak += 1
-    else:
-        user.current_streak = 1
-    user.last_active_day = today
-    user.longest_streak = max(user.longest_streak, user.current_streak)
 
 
 @router.post("/lessons/{lesson_id}/complete")
@@ -571,32 +597,73 @@ def complete_lesson(
         if i < len(body.answers) and body.answers[i] == q["answer_index"]
     )
 
-    already_done = lesson.completed
-    lesson.score = correct
-    lesson.total_questions = len(questions)
-    lesson.completed = True
-    lesson.completed_at = utcnow()
+    # Claim this completion atomically. Two tabs (or a network retry) cannot
+    # both observe "not completed" and mint the reward twice.
+    xp = 10 + 5 * correct
+    if questions and correct == len(questions):
+        xp += 15  # perfect-round bonus
+    coins = lesson_coin_reward(correct, len(questions))
+    claimed = db.execute(
+        update(Lesson)
+        .where(
+            Lesson.id == lesson_id,
+            Lesson.user_id == user.id,
+            Lesson.completed.is_(False),
+        )
+        .values(
+            score=correct,
+            total_questions=len(questions),
+            completed=True,
+            completed_at=utcnow(),
+            xp_awarded=xp,
+            coins_awarded=coins,
+        )
+    )
+    already_done = claimed.rowcount != 1
+    streak_result = {"freezes_used": 0, "streak_saved": False}
 
     if not already_done:
-        # Finishing is worth something; getting it right is worth more.
-        xp = 10 + 5 * correct
-        if questions and correct == len(questions):
-            xp += 15  # perfect-round bonus
-        lesson.xp_awarded = xp
-        user.xp += xp
-        _bump_streak(user)
+        # Serialize wallet/streak changes for this user on Postgres. SQLite
+        # ignores FOR UPDATE but its single-writer lock still protects the MVP.
+        user = db.scalar(
+            select(User)
+            .where(User.id == user.id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        user.xp = int(user.xp or 0) + xp
+        user.coins = coin_balance(user) + coins
+        streak_result = advance_streak(user)
+        first_due_day = user_today(user) + timedelta(days=1)
+        for question_index in range(len(questions)):
+            db.add(
+                ReviewProgress(
+                    user_id=user.id,
+                    lesson_id=lesson_id,
+                    question_index=question_index,
+                    due_day=first_due_day,
+                    interval_days=1,
+                )
+            )
 
     db.commit()
+    db.refresh(user)
+    if already_done:
+        db.refresh(lesson)
     return {
         "score": correct,
         "total": len(questions),
-        "xp_awarded": lesson.xp_awarded,
+        "xp_awarded": 0 if already_done else xp,
+        "coins_awarded": 0 if already_done else coins,
         "already_completed": already_done,
         "xp": user.xp,
         "level": user.xp // 100 + 1,
         "xp_into_level": user.xp % 100,
         "current_streak": user.current_streak,
         "longest_streak": user.longest_streak,
+        **wallet(user),
+        **streak_result,
+        "streak_status": streak_status(user),
     }
 
 
@@ -692,6 +759,7 @@ def add_shared(
         digest_id=None,
         topic_title=original.topic_title,
         topic_blurb=original.topic_blurb,
+        category=original.category,
         picked_by="shared",
         content_json=original.content_json,
         status="ready",
@@ -741,13 +809,18 @@ def progress(user: User = Depends(current_user), db: OrmSession = Depends(get_db
         .where(Lesson.user_id == user.id, Lesson.completed.is_(True))
         .order_by(Lesson.completed_at.desc())
     ).all()
-    days = sorted({lesson.completed_at.date() for lesson in lessons if lesson.completed_at})
+    days = sorted(
+        {user_day(user, lesson.completed_at) for lesson in lessons if lesson.completed_at}
+    )
     return {
         "xp": user.xp,
         "level": user.xp // 100 + 1,
         "xp_into_level": user.xp % 100,
         "current_streak": user.current_streak,
         "longest_streak": user.longest_streak,
+        **wallet(user),
+        "reward_catalog": catalog(),
+        "streak_status": streak_status(user),
         "lessons_completed": len(lessons),
         "active_days": [d.isoformat() for d in days],
         "history": [
@@ -760,6 +833,7 @@ def progress(user: User = Depends(current_user), db: OrmSession = Depends(get_db
                 "score": lesson.score,
                 "total": lesson.total_questions,
                 "xp": lesson.xp_awarded,
+                "coins": lesson.coins_awarded or 0,
                 "completed_at": lesson.completed_at.isoformat() if lesson.completed_at else None,
             }
             for lesson in lessons[:50]

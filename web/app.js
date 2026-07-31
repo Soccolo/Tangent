@@ -17,6 +17,17 @@ const state = {
   lesson: null,      // { id, content, pickedBy }
   step: 0,           // index into cards + questions
   answers: [],       // chosen option index per question; also marks it answered
+  hints: {},         // question index -> wrong option removed by a paid hint
+  growth: null,
+  explore: {
+    request: 0,
+    nodeKey: "",
+    visitSent: false,
+    reviewRun: null,
+    bossFeedback: null,
+  },
+  cosmetics: { owl: "", card: "", celebration: "" },
+  growthPriming: null,
 };
 
 /* ------------------------------------------------------------------ utils */
@@ -84,6 +95,11 @@ function applyAccent(accent) {
 const systemPrefersLight = () =>
   window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches;
 
+const browserTimezone = () => {
+  try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ""; }
+  catch { return ""; }
+};
+
 /* "system" is resolved to a concrete value here, matching the inline script in
    index.html, so the CSS only ever sees data-theme="light" or "dark". */
 function applyTheme(theme) {
@@ -93,6 +109,89 @@ function applyTheme(theme) {
   try { localStorage.setItem("tangent.theme", pref); } catch { /* private mode */ }
 }
 
+function cosmeticSlot(value) {
+  const slot = String(value || "").toLowerCase();
+  if (slot.includes("owl") || slot.includes("accessor")) return "owl";
+  if (slot.includes("desk")) return "desk";
+  if (slot.includes("card") || slot.includes("skin")) return "card";
+  if (slot.includes("celebr") || slot.includes("confetti") || slot.includes("burst")) {
+    return "celebration";
+  }
+  return "";
+}
+
+function cosmeticKey(value) {
+  const raw = typeof value === "object" && value
+    ? value.item_key ?? value.key ?? value.id ?? value.name
+    : value;
+  return String(raw || "").toLowerCase().replace(/[^a-z0-9_-]/g, "");
+}
+
+/* Both /auth/me and /growth may carry equipped cosmetics. Accept the compact
+   slot map as well as item records so the global look applies immediately
+   after boot, purchase or equip without coupling this client to one serializer. */
+function cosmeticsFrom(source) {
+  if (!source) return {};
+  const workshop = source.workshop || {};
+  const items = workshop.items || source.items || [];
+  const equipped = workshop.equipped
+    ?? source.equipped_cosmetics
+    ?? source.workshop_equipped
+    ?? source.cosmetics
+    ?? source.equipped;
+  const next = {};
+  const itemMap = new Map(items.map((item) => [cosmeticKey(item.key ?? item.item_key), item]));
+
+  if (Array.isArray(equipped)) {
+    equipped.forEach((entry) => {
+      const item = typeof entry === "string" ? itemMap.get(cosmeticKey(entry)) : entry;
+      const slot = cosmeticSlot(item?.slot || item?.type);
+      if (slot) next[slot] = cosmeticKey(item?.key ?? item?.item_key ?? entry);
+    });
+  } else if (equipped && typeof equipped === "object") {
+    Object.entries(equipped).forEach(([rawSlot, value]) => {
+      const slot = cosmeticSlot(rawSlot) || cosmeticSlot(value?.slot || value?.type);
+      if (slot) next[slot] = cosmeticKey(value);
+    });
+  }
+
+  items.filter((item) => item.equipped).forEach((item) => {
+    const slot = cosmeticSlot(item.slot || item.type);
+    if (slot) next[slot] = cosmeticKey(item.key ?? item.item_key);
+  });
+
+  const direct = {
+    owl: source.owl_cosmetic ?? source.equipped_owl ?? source.owl_accessory
+      ?? source.equipped_owl_accessory,
+    desk: source.desk_cosmetic ?? source.equipped_desk ?? source.desk_item
+      ?? source.equipped_desk_item,
+    card: source.card_cosmetic ?? source.equipped_card ?? source.card_skin
+      ?? source.equipped_card_theme,
+    celebration: source.celebration_cosmetic
+      ?? source.equipped_celebration
+      ?? source.celebration_style,
+  };
+  Object.entries(direct).forEach(([slot, value]) => {
+    if (value !== undefined && value !== null) next[slot] = cosmeticKey(value);
+  });
+  return next;
+}
+
+function applyCosmetics(source, { clear = false } = {}) {
+  const next = clear
+    ? { owl: "", desk: "", card: "", celebration: "" }
+    : cosmeticsFrom(source);
+  state.cosmetics = clear ? next : { ...state.cosmetics, ...next };
+  const root = document.documentElement;
+  Object.entries(state.cosmetics).forEach(([slot, key]) => {
+    const attr = `${slot}Cosmetic`;
+    if (key) root.dataset[attr] = key;
+    else delete root.dataset[attr];
+  });
+  const homeOwl = document.getElementById("homeOwl");
+  if (homeOwl && window.Owl) homeOwl.innerHTML = Owl.svg(34, "idle", state.cosmetics.owl);
+}
+
 // Follow the OS live, but only while the user is actually on "system".
 if (window.matchMedia) {
   window.matchMedia("(prefers-color-scheme: light)").addEventListener("change", () => {
@@ -100,26 +199,55 @@ if (window.matchMedia) {
   });
 }
 
+function displayStreak(user) {
+  return user?.streak_status?.expired ? 0 : (user?.current_streak || 0);
+}
+
 function paintStats() {
   const streak = document.getElementById("streakStat");
+  const coin = document.getElementById("coinStat");
   const xp = document.getElementById("xpStat");
   const avatarBtn = document.getElementById("avatarBtn");
   const logoutBtn = document.getElementById("logoutBtn");
   const signedIn = !!state.user;
+  const showChrome = signedIn && state.user.onboarded && !state.introing;
 
-  for (const el of [streak, xp, avatarBtn, logoutBtn]) {
-    el.classList.toggle("hidden", !signedIn);
+  for (const el of [streak, coin, xp, avatarBtn, logoutBtn]) {
+    el.classList.toggle("hidden", !showChrome);
   }
   applyAccent(signedIn ? state.user.accent : "");
-  if (signedIn) applyTheme(state.user.theme);
+  if (signedIn) {
+    applyTheme(state.user.theme);
+    applyCosmetics(state.user);
+  } else applyCosmetics(null, { clear: true });
   if (!signedIn) return;
+  if (!state.growth) primeGrowthCosmetics();
 
-  document.getElementById("streakNum").textContent = state.user.current_streak;
+  document.getElementById("streakNum").textContent = displayStreak(state.user);
+  document.getElementById("coinNum").textContent = state.user.coins || 0;
   document.getElementById("xpNum").textContent = state.user.xp;
   avatarBtn.style.cssText = avatarStyle(state.user.avatar);
   avatarBtn.textContent = state.user.avatar
     ? ""
     : initials(state.user.display_name, state.user.email);
+}
+
+function applyRewardPayload(data) {
+  if (!state.user || !data) return;
+  const equippedCosmetics = cosmeticsFrom(data);
+  state.user = {
+    ...state.user,
+    coins: data.coins ?? state.user.coins,
+    hint_tokens: data.hint_tokens ?? state.user.hint_tokens,
+    streak_freezes: data.streak_freezes ?? state.user.streak_freezes,
+    streak_status: data.streak_status ?? state.user.streak_status,
+    reward_catalog: data.catalog || data.reward_catalog || state.user.reward_catalog,
+    equipped_cosmetics: Object.keys(equippedCosmetics).length
+      ? { ...(state.user.equipped_cosmetics || {}), ...equippedCosmetics }
+      : state.user.equipped_cosmetics,
+  };
+  applyCosmetics(data);
+  paintStats();
 }
 
 /* Appearance choices apply and persist on click rather than on Save.
@@ -148,6 +276,12 @@ async function signOut() {
   state.digest = null;
   state.lesson = null;
   state.shared = null;
+  state.growth = null;
+  state.growthPriming = null;
+  state.explore.reviewRun = null;
+  state.explore.bossFeedback = null;
+  state.explore.visitSent = false;
+  applyCosmetics(null, { clear: true });
   if (location.pathname !== "/") history.replaceState({}, "", "/");
   render();
 }
@@ -163,6 +297,16 @@ document.getElementById("homeBtn").onclick = () => {
 };
 
 document.getElementById("logoutBtn").onclick = signOut;
+document.getElementById("coinStat").onclick = () => {
+  if (state.lesson) return toast("Finish or exit this lesson to visit Rewards.");
+  setTab("rewards");
+};
+document.getElementById("streakStat").onclick = () => {
+  if (!state.lesson) setTab("rewards");
+};
+document.getElementById("xpStat").onclick = () => {
+  if (!state.lesson) setTab("progress");
+};
 document.getElementById("avatarBtn").onclick = () => {
   state.lesson = null;
   state.shared = null;
@@ -192,7 +336,9 @@ function render() {
   if (!state.user.onboarded || state.introing) return renderIntro();
   tabs.classList.remove("hidden");
   if (state.lesson) return renderLesson();
+  if (state.tab === "explore") return renderExplore();
   if (state.tab === "library") return renderLibrary();
+  if (state.tab === "rewards") return renderRewards();
   if (state.tab === "progress") return renderProgress();
   if (state.tab === "profile") return renderProfile();
   return renderToday();
@@ -267,6 +413,7 @@ function renderAuth() {
       state.user = await api(`/api/auth/${mode === "signin" ? "signin" : "signup"}`, {
         method: "POST", body: payload,
       });
+      primeGrowthCosmetics();
       await loadToday();
       render();
     } catch (err) {
@@ -474,21 +621,21 @@ function introSteps(user) {
     {
       mood: "wave",
       line: "Hello — I'm Tangent.",
-      sub: "The owl in the glasses. Pleased to meet you.",
+      sub: "I turn the edges of your working day into a path towards broader range.",
     },
     {
       mood: "curious",
-      line: "Here's the idea.",
-      sub: "You already know your own job. I'm interested in everything sitting just "
-         + "next to it — the neighbouring discipline, the rule that shapes your work, "
-         + "the technique one step past the one you used today.",
+      line: "Start with the work you're already doing.",
+      sub: "Type a few lines, or let screen capture propose a private activity log for "
+         + "you to approve. I turn it into six useful subjects just outside your lane.",
+      preview: "discover",
     },
     {
       mood: "thinking",
-      line: "It works like this.",
-      sub: "You tell me what you worked on. Each evening I find six subjects next "
-         + "door to it, you pick one, and I pick a second from somewhere else "
-         + "entirely. Then I teach you both.",
+      line: "Choose a tangent. I'll widen it.",
+      sub: "You pick one topic and I add a surprise from another direction. Each becomes "
+         + "a visual lesson with questions, explanations and help when you need it.",
+      preview: "learn",
     },
     {
       mood: "curious",
@@ -517,12 +664,36 @@ function introSteps(user) {
     },
     {
       mood: "proud",
-      line: "That's everything.",
-      sub: "Log what you work on — a line or two is plenty — and press the button. "
-         + "I'll do the rest.",
+      line: "Your first tangent is waiting.",
+      sub: `You have ${Number(user.coins) || 0} coins and ${Number(user.hint_tokens) || 0} hint token`
+         + `${Number(user.hint_tokens) === 1 ? "" : "s"}. Finish lessons `
+         + "to earn more, keep your streak alive, and unlock help when it matters.",
       last: true,
     },
   ];
+}
+
+function tourPreviewHtml(kind) {
+  if (kind === "discover") return `
+    <div class="tour-flow" aria-label="How Tangent finds subjects for you">
+      <div class="tour-node"><span>✍️</span><b>Log or capture</b><small>You approve every line</small></div>
+      <i aria-hidden="true">→</i>
+      <div class="tour-node"><span>✦</span><b>Six directions</b><small>Built from today</small></div>
+      <i aria-hidden="true">→</i>
+      <div class="tour-node"><span>🦉</span><b>Two picks</b><small>Yours + a surprise</small></div>
+    </div>`;
+  if (kind === "learn") return `
+    <div class="tour-grid" aria-label="What Tangent offers">
+      <div class="tour-feature"><span>◫</span><div><b>Visual lessons</b><small>Cards, diagrams and key terms</small></div></div>
+      <div class="tour-feature"><span>💡</span><div><b>Useful hints</b><small>Remove a wrong answer</small></div></div>
+      <div class="tour-feature"><span>🔥</span><div><b>Daily momentum</b><small>Streaks, XP and levels</small></div></div>
+      <div class="tour-feature"><span><i class="coin-mini" aria-hidden="true">T</i></span><div><b>Earn coins</b><small>Buy hints and streak freezes</small></div></div>
+      <div class="tour-feature"><span>↻</span><div><b>3-minute reviews</b><small>Recall ideas when they are due</small></div></div>
+      <div class="tour-feature"><span>✦</span><div><b>Your constellation</b><small>See your range light up</small></div></div>
+      <div class="tour-feature"><span>⌁</span><div><b>Shared library</b><small>Learn and share without regenerating</small></div></div>
+      <div class="tour-feature"><span>◎</span><div><b>Private circles</b><small>Shared goals, never rankings</small></div></div>
+    </div>`;
+  return "";
 }
 
 function renderIntro() {
@@ -535,17 +706,25 @@ function renderIntro() {
   };
   let i = Math.min(state.introStep || 0, steps.length - 1);
 
+  let stopSpeech = () => {};
+  let settleTimer;
   const paint = () => {
+    stopSpeech();
+    clearTimeout(settleTimer);
     const step = steps[i];
     const value = step.key ? state.introDraft[step.key] : "";
     view.innerHTML = `
       <div class="card intro" style="margin-top:18px">
-        <div class="step-dots">
+        <div class="intro-progress">
+          <span>Step ${i + 1} of ${steps.length}</span>
+          <div class="step-dots" aria-hidden="true">
           ${steps.map((_, n) => `<i class="${n <= i ? "on" : ""}"></i>`).join("")}
+          </div>
         </div>
         ${Owl.render({ size: 108, mood: step.mood })}
         <div class="owl-bubble" id="introSay"></div>
         ${step.sub ? `<p class="muted small" id="introSub" style="margin-top:14px;opacity:0">${esc(step.sub)}</p>` : ""}
+        ${step.preview ? tourPreviewHtml(step.preview) : ""}
         ${step.key ? `
           <div class="field">
             ${step.chips ? `<div class="chips" id="introChips">
@@ -561,12 +740,14 @@ function renderIntro() {
           ${step.last ? "Let's go" : "Continue"}</button>
         <div class="row" style="justify-content:center;margin-top:10px">
           ${i > 0 ? `<button class="btn ghost small" id="introBack">Back</button>` : ""}
-          ${!step.last ? `<button class="btn ghost small" id="introSkip">Skip the tour</button>` : ""}
+          ${!step.last && (i < 3 || step.optional) ? `<button class="btn ghost small" id="introSkip">${
+            i < 3 ? "Skip tour" : "Skip this question"}</button>` : ""}
         </div>
       </div>`;
+    window.scrollTo({ top: 0, behavior: "auto" });
 
     const owl = view.querySelector(".owl");
-    Owl.say(document.getElementById("introSay"), step.line, {
+    stopSpeech = Owl.say(document.getElementById("introSay"), step.line, {
       done: () => {
         const sub = document.getElementById("introSub");
         if (sub) sub.style.transition = "opacity .4s ease", sub.style.opacity = "1";
@@ -575,7 +756,9 @@ function renderIntro() {
       },
     });
     // Settle to a resting expression once the greeting animation has played.
-    if (step.mood === "wave") setTimeout(() => Owl.setMood(owl, "happy"), 2400);
+    if (step.mood === "wave") {
+      settleTimer = setTimeout(() => Owl.setMood(owl, "happy"), 2400);
+    }
 
     const chips = document.getElementById("introChips");
     if (chips) chips.onclick = (e) => {
@@ -609,7 +792,18 @@ function renderIntro() {
     if (back) back.onclick = () => { capture(); i--; state.introStep = i; paint(); };
 
     const skip = document.getElementById("introSkip");
-    if (skip) skip.onclick = (e) => { capture(); finishIntro(e.currentTarget); };
+    if (skip) skip.onclick = (e) => {
+      capture();
+      if (i < 3) {
+        i = 3;
+        state.introStep = i;
+        paint();
+      } else {
+        i++;
+        state.introStep = i;
+        paint();
+      }
+    };
   };
 
   paint();
@@ -620,7 +814,7 @@ async function finishIntro(button) {
   try {
     state.user = await api("/api/auth/me", {
       method: "PATCH",
-      body: { ...state.introDraft, onboarded: true },
+      body: { ...state.introDraft, onboarded: true, timezone: browserTimezone() || undefined },
     });
     state.introing = false;
     state.introStep = 0;
@@ -866,6 +1060,14 @@ async function loadToday() {
   state.digest = digest.exists ? digest : null;
   state.saved = saved;
   state.observations = pending.observations || [];
+  const timezone = browserTimezone();
+  if (timezone && state.user.timezone !== timezone) {
+    try {
+      state.user = await api("/api/auth/me", {
+        method: "PATCH", body: { timezone },
+      });
+    } catch { /* Streaks fall back to the server day until the next visit. */ }
+  }
 }
 
 function categoryLabel(c) {
@@ -873,11 +1075,35 @@ function categoryLabel(c) {
            commercial: "Commercial", frontier: "Frontier" }[c] || c;
 }
 
+function momentumHtml() {
+  const u = state.user;
+  const status = u.streak_status || {};
+  const currentStreak = displayStreak(u);
+  let message = "Finish a lesson today to start your streak.";
+  if (status.active_today) message = "Today's streak is safe. Anything else is a bonus.";
+  else if (status.expired) {
+    message = "That streak has ended. Finish a lesson today to start a fresh one.";
+  } else if (status.protected) {
+    message = `${status.missed_days} missed day${status.missed_days === 1 ? "" : "s"} will be covered when you finish a lesson.`;
+  } else if (status.at_risk) {
+    message = `Your streak needs ${status.missed_days} freeze${status.missed_days === 1 ? "" : "s"} before your next finish.`;
+  } else if (currentStreak > 0) {
+    message = "Finish one lesson today to keep it moving.";
+  }
+  return `
+    <button class="momentum" id="openRewards" type="button">
+      <span class="momentum-flame">🔥</span>
+      <span class="momentum-copy"><b>${currentStreak} day streak</b><small>${esc(message)}</small></span>
+      <span class="momentum-wallet"><i class="coin-mini">T</i> ${u.coins || 0}</span>
+    </button>`;
+}
+
 function renderToday() {
   const logged = state.activities.length;
   const digest = state.digest;
 
   view.innerHTML = `
+    ${momentumHtml()}
     <div class="card">
       <h2>What did you work on?</h2>
       <p class="muted small">One line per thing. Cases, models, searches, papers,
@@ -942,6 +1168,7 @@ function renderToday() {
       renderToday();
     } catch (err) { toast(err.message); }
   };
+  document.getElementById("openRewards").onclick = () => setTab("rewards");
 
   view.querySelectorAll("[data-del]").forEach((b) => {
     b.onclick = async () => {
@@ -1070,6 +1297,7 @@ function startLesson(lesson) {
   state.lesson = lesson;
   state.step = 0;
   state.answers = [];
+  state.hints = lesson.hints || {};
   render();
 }
 
@@ -1222,16 +1450,29 @@ function renderQuestion(question, qIndex) {
   // Derived per question, not a single flag — otherwise stepping back into an
   // answered question would show it blank and let you answer twice.
   const answered = chosen !== undefined;
+  const eliminated = state.hints[String(qIndex)];
+  const hintPrice = state.user.reward_catalog?.hint?.price ?? 15;
+  const hintTokens = Number(state.user.hint_tokens) || 0;
 
   stage.innerHTML = `
     <div class="tag">Question ${qIndex + 1}</div>
     <h2 style="margin-top:12px">${esc(question.prompt)}</h2>
+    ${!answered ? `<div class="question-help">
+      ${Number.isInteger(eliminated)
+        ? `<div class="hint-reveal" role="status"><span>💡</span><span>One wrong answer is out. The rest is yours.</span></div>`
+        : `<button class="btn hint-btn small" id="useHint" type="button">
+            💡 ${hintTokens ? `Use hint · ${hintTokens} ready` : `Buy & use hint · ${hintPrice} coins`}
+          </button>`}
+    </div>` : ""}
     <div class="options">
       ${question.options.map((opt, i) => {
         let cls = "option";
         if (answered && i === question.answer_index) cls += " correct";
         else if (answered && i === chosen) cls += " wrong";
-        return `<button class="${cls}" data-opt="${i}" ${answered ? "disabled" : ""}>${esc(opt)}</button>`;
+        else if (!answered && i === eliminated) cls += " eliminated";
+        const disabled = answered || (!answered && i === eliminated);
+        return `<button class="${cls}" data-opt="${i}" ${disabled ? "disabled" : ""}>${
+          esc(opt)}${!answered && i === eliminated ? `<span class="eliminated-label">Removed</span>` : ""}</button>`;
       }).join("")}
     </div>
     ${answered ? reactionHtml(chosen === question.answer_index, question.explanation, qIndex)
@@ -1244,8 +1485,38 @@ function renderQuestion(question, qIndex) {
     };
   });
 
+  const hint = document.getElementById("useHint");
+  if (hint) hint.onclick = () => useQuestionHint(qIndex, hint);
+
   const next = document.getElementById("next");
   if (next) next.onclick = () => { state.step++; renderLesson(); };
+}
+
+async function useQuestionHint(qIndex, button) {
+  if (!state.lesson || state.answers[qIndex] !== undefined) return;
+  const lessonId = state.lesson.id;
+  busy(button, true, state.user.hint_tokens ? "Finding a clue…" : "Buying a hint…");
+  try {
+    if (!(Number(state.user.hint_tokens) > 0)) {
+      const purchase = await api("/api/rewards/purchase", {
+        method: "POST", body: { item: "hint" },
+      });
+      applyRewardPayload(purchase);
+    }
+    const result = await api("/api/rewards/hints/use", {
+      method: "POST",
+      body: { lesson_id: lessonId, question_index: qIndex },
+    });
+    applyRewardPayload(result);
+    state.hints[String(qIndex)] = Number(result.eliminated_index);
+    if (state.lesson?.id !== lessonId) return;
+    const cards = state.lesson.content.cards || [];
+    if (state.step === cards.length + qIndex) renderQuestion(
+      state.lesson.content.questions[qIndex], qIndex);
+  } catch (err) {
+    busy(button, false);
+    toast(err.message);
+  }
 }
 
 async function renderFinish() {
@@ -1277,12 +1548,15 @@ async function renderFinish() {
       <div class="owl-bubble" id="finishSay"></div>
       <h1 style="margin-top:16px">${perfect ? "Clean sweep." : half ? "Nice work." : "Worth another pass."}</h1>
       <div class="bigscore">${result.score}<span class="muted" style="font-size:24px">/${result.total}</span></div>
+      ${result.streak_saved ? `<div class="streak-saved" role="status">🧊 A streak freeze covered ${
+        result.freezes_used} missed day${result.freezes_used === 1 ? "" : "s"}. Your streak lives.</div>` : ""}
       <div class="rewards">
-        <div class="reward"><div class="n">+${result.xp_awarded}</div><div class="tiny muted">XP earned</div></div>
-        <div class="reward"><div class="n">🔥 ${result.current_streak}</div><div class="tiny muted">day streak</div></div>
-        <div class="reward"><div class="n">${result.level}</div><div class="tiny muted">level</div></div>
+        <div class="reward" data-reward="xp"><div class="n">+${result.xp_awarded}</div><div class="tiny muted">XP earned</div></div>
+        <div class="reward coin-reward" data-reward="coins"><div class="n">+${result.coins_awarded}</div><div class="tiny muted">coins earned</div></div>
+        <div class="reward" data-reward="streak"><div class="n">🔥 ${result.current_streak}</div><div class="tiny muted">day streak</div></div>
+        <div class="reward" data-reward="level"><div class="n">${result.level}</div><div class="tiny muted">level</div></div>
       </div>
-      ${result.already_completed ? `<p class="tiny muted">Review run — no extra XP.</p>` : ""}
+      ${result.already_completed ? `<p class="tiny muted">Review run — no extra XP or coins.</p>` : ""}
       <div class="levelbar"><i style="width:${result.xp_into_level}%"></i></div>
       <p class="tiny muted" style="margin-top:6px">${100 - result.xp_into_level} XP to level ${result.level + 1}</p>
       <button class="btn wide" id="done" style="margin-top:18px">Back to today</button>
@@ -1478,6 +1752,808 @@ function leaveShared() {
   render();
 }
 
+/* --- explore -------------------------------------------------------------
+   A single home for the more playful systems. All progress, rewards and
+   correctness remain server-owned; this layer only presents them. */
+
+const growthNumber = (value, fallback = 0) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+};
+
+const growthPercent = (progress, target = 100) => {
+  const total = Math.max(1, growthNumber(target, 100));
+  return Math.max(0, Math.min(100, (growthNumber(progress) / total) * 100));
+};
+
+function rewardLabel(reward) {
+  if (reward == null || reward === "") return "";
+  if (typeof reward === "number") return `${reward} coins`;
+  if (typeof reward === "string") return reward;
+  const amount = reward.amount ?? reward.coins ?? reward.value;
+  const name = reward.name ?? reward.label ?? reward.type ?? "reward";
+  return amount == null ? String(name) : `${amount} ${name}`;
+}
+
+function growthWallet(data) {
+  return { ...(data?.wallet || {}), ...(data || {}) };
+}
+
+function constellationNodeKey(node, index) {
+  return String(node?.key ?? node?.id ?? node?.title ?? node?.name ?? `node-${index}`);
+}
+
+function constellationNodeTitle(node) {
+  return node?.title ?? node?.name ?? node?.topic ?? node?.label ?? "New direction";
+}
+
+function constellationNodeProgress(node) {
+  if (node?.progress != null || node?.mastery != null) {
+    return growthNumber(node.progress ?? node.mastery);
+  }
+  if (node?.lesson_count) {
+    return growthPercent(node.completed_count, node.lesson_count);
+  }
+  return node?.completed_count ? 100 : 0;
+}
+
+function constellationMarkup(constellation = {}) {
+  const categories = Array.isArray(constellation.categories)
+    ? constellation.categories.slice(0, 8)
+    : [];
+  const nodes = Array.isArray(constellation.nodes) ? constellation.nodes.slice(0, 16) : [];
+  const dense = nodes.length > 8;
+  const selected = nodes.find((node, index) =>
+    constellationNodeKey(node, index) === state.explore.nodeKey);
+  const role = constellation.role || state.user?.role || "Your work";
+
+  const categoryButtons = categories.map((category, index) => {
+    const angle = -Math.PI / 2 + (Math.PI * 2 * index / Math.max(1, categories.length));
+    const x = 50 + Math.cos(angle) * 32;
+    const y = 50 + Math.sin(angle) * 32;
+    const matchingNode = typeof category === "string"
+      ? nodes.find((node) => String(node.key) === category)
+      : null;
+    const title = typeof category === "string"
+      ? matchingNode?.label || category
+      : category.title ?? category.name ?? category.label ?? "Adjacent";
+    return `<span class="constellation-category" style="left:${x.toFixed(2)}%;top:${y.toFixed(2)}%">
+      ${esc(title)}
+    </span>`;
+  }).join("");
+
+  const nodeButtons = nodes.map((node, index) => {
+    const innerCount = dense ? Math.ceil(nodes.length / 2) : nodes.length;
+    const outerCount = Math.max(1, nodes.length - innerCount);
+    const outer = dense && index >= innerCount;
+    const ringIndex = outer ? index - innerCount : index;
+    const ringCount = outer ? outerCount : innerCount;
+    const offset = outer ? Math.PI / ringCount : 0;
+    const angle = -Math.PI / 2 + offset + (Math.PI * 2 * ringIndex / Math.max(1, ringCount));
+    const radius = dense ? (outer ? 44 : 30) : (index % 2 ? 44 : 40);
+    const x = 50 + Math.cos(angle) * radius;
+    const y = 50 + Math.sin(angle) * radius;
+    const key = constellationNodeKey(node, index);
+    const progress = constellationNodeProgress(node);
+    const active = key === state.explore.nodeKey;
+    const discovered = node.visited || node.complete || node.unlocked || progress > 0;
+    return `<button class="constellation-node ${discovered ? "discovered" : ""} ${active ? "active" : ""}"
+      style="left:${x.toFixed(2)}%;top:${y.toFixed(2)}%"
+      data-constellation-node="${index}" aria-pressed="${active}"
+      aria-label="${esc(constellationNodeTitle(node))}${progress ? `, ${Math.round(progress)} percent explored` : ""}">
+      <span>${esc(constellationNodeTitle(node))}</span>
+    </button>`;
+  }).join("");
+
+  const detail = selected ? `
+    <div class="constellation-detail" tabindex="-1">
+      <div>
+        <span class="tag cat">${esc(selected.category ?? selected.category_name ?? "Topic")}</span>
+        <h3>${esc(constellationNodeTitle(selected))}</h3>
+        <p class="muted small">${esc(selected.detail ?? selected.description
+          ?? selected.summary ?? "A promising direction just outside your usual work.")}</p>
+      </div>
+      ${selected.progress != null || selected.mastery != null || selected.lesson_count != null ? `
+        <div class="node-progress" aria-label="${Math.round(growthNumber(
+          constellationNodeProgress(selected)))} percent explored">
+          <b>${Math.round(constellationNodeProgress(selected))}%</b>
+          <small>explored</small>
+        </div>` : ""}
+      ${selected.lesson_id ? `<button class="btn small" data-constellation-open="${
+        Number(selected.lesson_id)}">Open</button>` : ""}
+    </div>` : `
+    <p class="tiny muted center constellation-prompt">
+      Tap a glowing topic to see why it sits next to your role.
+    </p>`;
+
+  return `
+    <section class="explore-section card" id="explore-map" aria-labelledby="explore-map-title">
+      <div class="section-heading">
+        <div><span class="eyebrow">Your learning map</span><h2 id="explore-map-title">Constellation</h2></div>
+        <span class="visit-status">${constellation.visited_today ? "Seen today" : "Mapping..."}</span>
+      </div>
+      <p class="muted small">Your role is the centre. The brightest nodes are the next useful tangents.</p>
+      <div class="constellation ${dense ? "dense" : ""}" role="group"
+        aria-label="Topics adjacent to ${esc(role)}">
+        <span class="constellation-orbit orbit-one" aria-hidden="true"></span>
+        <span class="constellation-orbit orbit-two" aria-hidden="true"></span>
+        ${categoryButtons}
+        ${nodeButtons}
+        <div class="constellation-role">
+          <small>Your role</small><strong>${esc(role)}</strong>
+        </div>
+      </div>
+      ${detail}
+    </section>`;
+}
+
+function reviewMarkup(review = {}) {
+  const run = state.explore.reviewRun;
+  const due = growthNumber(review.due_count);
+  const reviewed = growthNumber(review.reviewed_today);
+  const available = Array.isArray(review.questions) ? review.questions : [];
+
+  if (run?.complete) {
+    const correct = run.results.filter(Boolean).length;
+    return `
+      <section class="explore-section card review-card complete" id="explore-review"
+        aria-labelledby="explore-review-title">
+        <div class="review-finish">
+          ${Owl.render({ size: 72, mood: "proud" })}
+          <div><span class="eyebrow">Three minutes well spent</span>
+            <h2 id="explore-review-title">${correct}/${run.questions.length} recalled</h2>
+            <p class="muted small">The next review will arrive when the memory needs it.</p>
+          </div>
+        </div>
+        ${due > 0 && available.length ? `
+          <button class="btn ghost small wide" data-review-start>Review another set</button>` : ""}
+      </section>`;
+  }
+
+  if (!run) {
+    return `
+      <section class="explore-section card review-card" id="explore-review"
+        aria-labelledby="explore-review-title">
+        <div class="section-heading">
+          <div><span class="eyebrow">Keep it retrievable</span><h2 id="explore-review-title">3-minute review</h2></div>
+          <span class="review-count">${due} due</span>
+        </div>
+        <p class="muted small">${reviewed
+          ? `${reviewed} reviewed today. A short return makes yesterday's tangent stick.`
+          : "Three quick questions, chosen from lessons that are ready to be recalled."}</p>
+        <button class="btn wide" data-review-start ${available.length ? "" : "disabled"}>
+          ${available.length ? "Start the review" : "Nothing due right now"}
+        </button>
+      </section>`;
+  }
+
+  const question = run.questions[run.index];
+  const feedback = run.feedback;
+  const options = Array.isArray(question.options) ? question.options : [];
+  const correctIndex = feedback?.correct_index ?? feedback?.correct_answer_index;
+  return `
+    <section class="explore-section card review-card" id="explore-review"
+      aria-labelledby="explore-review-title">
+      <div class="section-heading">
+        <div><span class="eyebrow">${esc(question.lesson_title || "Quick recall")}</span>
+          <h2 id="explore-review-title">Question ${run.index + 1} of ${run.questions.length}</h2></div>
+        <span class="review-timer" aria-label="About three minutes">~3 min</span>
+      </div>
+      <div class="review-dots" aria-hidden="true">${run.questions.map((_, index) =>
+        `<i class="${index < run.index ? "done" : index === run.index ? "now" : ""}"></i>`).join("")}</div>
+      <p class="review-prompt">${esc(question.prompt)}</p>
+      <div class="options explore-options">${options.map((option, index) => {
+        let resultClass = "";
+        if (feedback) {
+          if (index === correctIndex || (feedback.correct && index === feedback.selected)) {
+            resultClass = "correct";
+          } else if (!feedback.correct && index === feedback.selected) {
+            resultClass = "wrong";
+          }
+        }
+        return `<button class="option ${resultClass}" data-review-option="${index}"
+          ${feedback ? "disabled" : ""}>${esc(option)}</button>`;
+      }).join("")}</div>
+      ${feedback ? `
+        <div class="review-feedback ${feedback.correct ? "correct" : "wrong"}" role="status" aria-live="polite">
+          <b>${feedback.correct ? "That came back." : "Worth another look."}</b>
+          <span>${esc(feedback.explanation ?? feedback.feedback
+            ?? "The answer has been added back to your review rhythm.")}</span>
+        </div>
+        <button class="btn wide" data-review-next>
+          ${run.index + 1 >= run.questions.length ? "Complete review" : "Next question"}
+        </button>` : ""}
+    </section>`;
+}
+
+function missionsMarkup(missions = []) {
+  const list = Array.isArray(missions) ? missions : [];
+  return `
+    <section class="explore-section card" id="explore-missions" aria-labelledby="explore-missions-title">
+      <div class="section-heading">
+        <div><span class="eyebrow">Small wins, every day</span><h2 id="explore-missions-title">Daily missions</h2></div>
+        <span class="mission-total">${list.filter((mission) => mission.complete).length}/${list.length}</span>
+      </div>
+      <div class="mission-list">${list.length ? list.map((mission) => {
+        const progress = growthNumber(mission.progress);
+        const target = Math.max(1, growthNumber(mission.target, 1));
+        const complete = !!mission.complete;
+        const claimed = !!mission.claimed;
+        return `<article class="mission ${complete ? "complete" : ""}">
+          <div class="mission-copy"><h3>${esc(mission.title || "Daily tangent")}</h3>
+            <p class="tiny muted">${esc(mission.detail || "")}</p>
+            <div class="progress mission-progress"><i style="width:${growthPercent(progress, target)}%"></i></div>
+          </div>
+          <div class="mission-action">
+            <span>${Math.min(progress, target)}/${target}</span>
+            ${claimed ? `<b class="claimed">Claimed</b>`
+              : complete ? `<button class="btn small" data-mission-claim="${esc(mission.key)}">
+                  +${esc(rewardLabel(mission.reward))}</button>`
+              : `<small>${esc(rewardLabel(mission.reward))}</small>`}
+          </div>
+        </article>`;
+      }).join("") : `<p class="muted small">New missions are being prepared.</p>`}</div>
+    </section>`;
+}
+
+function bossMarkup(boss = {}) {
+  const cachedFeedback = state.explore.bossFeedback;
+  const feedback = cachedFeedback
+    && cachedFeedback.week_key === boss.week_key
+    && (!cachedFeedback.scenario_key || !boss.scenario_key
+      || cachedFeedback.scenario_key === boss.scenario_key)
+    ? cachedFeedback
+    : null;
+  const attempted = boss.attempted || feedback?.attempted;
+  const correct = feedback?.correct ?? boss.correct;
+  return `
+    <section class="explore-section card boss-card ${boss.locked ? "locked" : ""}"
+      id="explore-boss" aria-labelledby="explore-boss-title">
+      <div class="boss-mark" aria-hidden="true">${boss.locked ? "LOCK" : "WEEK"}</div>
+      <span class="eyebrow">One bigger connection</span>
+      <h2 id="explore-boss-title">Weekly boss</h2>
+      ${boss.locked ? `
+        <p class="muted">${esc(boss.reason || "Complete more of this week's learning to unlock the boss.")}</p>
+      ` : attempted ? `
+        <div class="boss-result ${correct ? "correct" : "wrong"}" role="status">
+          <h3>${correct ? "Connection made." : "The boss got this round."}</h3>
+          <p class="muted small">${esc(feedback?.explanation ?? boss.explanation
+            ?? "A fresh challenge arrives next week.")}</p>
+          <span class="tag cat">Reward: ${esc(rewardLabel(feedback?.reward ?? boss.reward))}</span>
+        </div>
+      ` : `
+        <p class="boss-prompt">${esc(boss.prompt || "Your weekly challenge will appear here.")}</p>
+        <div class="options boss-options">${(boss.options || []).map((option, index) =>
+          `<button class="option" data-boss-option="${index}">${esc(option)}</button>`).join("")}</div>
+        <p class="tiny muted">One attempt. Think across the boundaries of your role.</p>
+      `}
+    </section>`;
+}
+
+function itemEquipped(item, equipped) {
+  if (item.equipped) return true;
+  const key = cosmeticKey(item.key ?? item.item_key);
+  if (Array.isArray(equipped)) return equipped.some((entry) => cosmeticKey(entry) === key);
+  if (equipped && typeof equipped === "object") {
+    return Object.values(equipped).some((entry) => cosmeticKey(entry) === key);
+  }
+  return false;
+}
+
+function workshopPreview(item) {
+  const rawSlot = String(item.slot || item.type || "").toLowerCase();
+  const slot = cosmeticSlot(rawSlot);
+  const key = cosmeticKey(item.key ?? item.item_key);
+  if (slot === "owl") {
+    return `<div class="workshop-preview owl-preview">${Owl.render({
+      size: 60, mood: "proud", accessory: key,
+    })}</div>`;
+  }
+  if (slot === "card") {
+    return `<div class="workshop-preview card-preview" data-preview-cosmetic="${key}">
+      <span></span><i></i><i></i><small>Tangent card</small>
+    </div>`;
+  }
+  if (slot === "celebration") {
+    return `<div class="workshop-preview burst-preview" data-preview-cosmetic="${key}" aria-hidden="true">
+      ${Array.from({ length: 7 }, (_, index) => `<i style="--piece:${index}"></i>`).join("")}
+    </div>`;
+  }
+  if (rawSlot.includes("desk")) {
+    return `<div class="workshop-preview desk-preview" aria-label="${esc(item.name || "Desk item")}">
+      <span class="fern-leaf leaf-one"></span><span class="fern-leaf leaf-two"></span>
+      <span class="fern-leaf leaf-three"></span><i class="fern-pot"></i>
+    </div>`;
+  }
+  return `<div class="workshop-preview generic-preview">${esc(item.preview || "New")}</div>`;
+}
+
+function workshopMarkup(workshop = {}, coins = 0) {
+  const items = Array.isArray(workshop.items) ? workshop.items : [];
+  return `
+    <section class="explore-section card workshop-card" id="explore-workshop"
+      aria-labelledby="explore-workshop-title">
+      <div class="section-heading">
+        <div><span class="eyebrow">Make Tangent yours</span><h2 id="explore-workshop-title">Owl Workshop</h2></div>
+        <span class="workshop-balance"><span class="coin-mini" aria-hidden="true">T</span> ${growthNumber(coins)}</span>
+      </div>
+      <p class="muted small">Coins unlock appearance only. Preview, collect, and equip a little personality.</p>
+      <div class="workshop-grid">${items.length ? items.map((item) => {
+        const key = cosmeticKey(item.key ?? item.item_key);
+        const equipped = itemEquipped(item, workshop.equipped);
+        const affordable = growthNumber(coins) >= growthNumber(item.price);
+        return `<article class="workshop-item ${equipped ? "equipped" : ""}">
+          ${workshopPreview(item)}
+          <div class="workshop-copy"><h3>${esc(item.name || key)}</h3>
+            <p class="tiny muted">${esc(item.description || item.preview || "")}</p></div>
+          ${equipped ? `<button class="btn ghost small" disabled>Equipped</button>`
+            : item.owned ? `<button class="btn small" data-workshop-equip="${key}">Equip</button>`
+            : `<button class="btn small" data-workshop-buy="${key}" ${affordable ? "" : "disabled"}>
+                ${affordable ? `${growthNumber(item.price)} coins`
+                  : `Need ${Math.max(0, growthNumber(item.price) - growthNumber(coins))} more`}
+              </button>`}
+        </article>`;
+      }).join("") : `<p class="muted small">The workshop shelves are being stocked.</p>`}</div>
+    </section>`;
+}
+
+function circlesMarkup(circles = []) {
+  const list = Array.isArray(circles) ? circles : [];
+  return `
+    <section class="explore-section card circles-card" id="explore-circles"
+      aria-labelledby="explore-circles-title">
+      <div class="section-heading">
+        <div><span class="eyebrow">Private, collaborative, calm</span><h2 id="explore-circles-title">Learning circles</h2></div>
+        <span class="no-ranks">No leaderboard</span>
+      </div>
+      <p class="muted small">Invite people you trust and fill a shared weekly goal. Contributions are visible; nobody is ranked.</p>
+      <div class="circle-forms">
+        <form id="circleCreateForm">
+          <label for="circleName">Start a circle</label>
+          <div class="row"><input id="circleName" type="text" maxlength="60"
+            placeholder="e.g. Curious generalists" required>
+            <button class="btn small" type="submit">Create</button></div>
+        </form>
+        <form id="circleJoinForm">
+          <label for="circleCode">Join with an invite</label>
+          <div class="row"><input id="circleCode" type="text" maxlength="32"
+            placeholder="Invite code" autocapitalize="characters" required>
+            <button class="btn ghost small" type="submit">Join</button></div>
+        </form>
+      </div>
+      <div class="circle-list">${list.map((circle) => {
+        const progress = growthNumber(circle.weekly_progress);
+        const goal = Math.max(1, growthNumber(circle.weekly_goal, 1));
+        return `<article class="circle">
+          <div class="circle-top"><div><h3>${esc(circle.name)}</h3>
+            <span class="tiny muted">${growthNumber(circle.member_count, (circle.members || []).length)}
+              member${growthNumber(circle.member_count, (circle.members || []).length) === 1 ? "" : "s"}</span></div>
+            <button class="btn ghost small" data-circle-copy="${esc(circle.invite_code)}">Copy invite</button>
+          </div>
+          <div class="circle-goal"><div class="row"><b>Shared weekly goal</b>
+            <span class="spacer"></span><span>${progress}/${goal}</span></div>
+            <div class="progress"><i style="width:${growthPercent(progress, goal)}%"></i></div></div>
+          <div class="circle-members">${(circle.members || []).map((member) => `
+            <div class="circle-member">
+              <span class="circle-avatar" style="${avatarStyle(member.avatar)}">${
+                member.avatar ? "" : esc(initials(member.display_name || member.name))}</span>
+              <span>${esc(member.display_name || member.name || "Member")}</span>
+              <b>+${growthNumber(member.contribution)}</b>
+            </div>`).join("")}</div>
+          <button class="circle-leave" data-circle-leave="${esc(circle.id)}">Leave circle</button>
+        </article>`;
+      }).join("")}</div>
+    </section>`;
+}
+
+function paintExplore() {
+  if (state.tab !== "explore" || state.lesson || !state.growth) return;
+  const data = state.growth;
+  const coins = growthNumber(data.coins ?? data.wallet?.coins ?? state.user?.coins);
+  view.innerHTML = `
+    <div class="explore-hero card">
+      <div class="explore-hero-copy">
+        <span class="eyebrow">Go tangent on purpose</span>
+        <h1>Explore</h1>
+        <p class="muted">See what is adjacent, keep it in memory, and grow with a little momentum.</p>
+      </div>
+      ${Owl.render({ size: 82, mood: "curious" })}
+    </div>
+    <nav class="explore-jumps" aria-label="Explore sections">
+      ${[
+        ["map", "Map"], ["review", "Review"], ["missions", "Missions"],
+        ["boss", "Boss"], ["workshop", "Workshop"], ["circles", "Circles"],
+      ].map(([id, label]) =>
+        `<button data-explore-jump="${id}">${label}</button>`).join("")}
+    </nav>
+    ${constellationMarkup(data.constellation)}
+    ${reviewMarkup(data.review)}
+    ${missionsMarkup(data.missions)}
+    ${bossMarkup(data.boss)}
+    ${workshopMarkup(data.workshop, coins)}
+    ${circlesMarkup(data.circles)}`;
+  bindExplore();
+}
+
+function focusExplore(selector) {
+  const target = view.querySelector(selector);
+  if (!target) return;
+  if (!target.matches("button, input, select, textarea, a[href], [tabindex]")) {
+    target.setAttribute("tabindex", "-1");
+  }
+  target.focus({ preventScroll: true });
+}
+
+function primeGrowthCosmetics() {
+  if (!state.user || state.growth || state.growthPriming) return state.growthPriming;
+  const userId = state.user.id;
+  state.growthPriming = (async () => {
+    try {
+      const data = await api("/api/growth");
+      if (!state.user || state.user.id !== userId) return;
+      state.growth = data;
+      applyRewardPayload(growthWallet(data));
+      applyCosmetics(data);
+      if (state.tab === "explore" && !state.lesson) paintExplore();
+    } catch {
+      /* Explore will show a retry if the user opens it; cosmetics are optional chrome. */
+    } finally {
+      state.growthPriming = null;
+    }
+  })();
+  return state.growthPriming;
+}
+
+async function renderExplore() {
+  const request = ++state.explore.request;
+  if (state.growth) paintExplore();
+  else view.innerHTML = `<div class="card center"><span class="spinner"></span>
+    <p class="tiny muted">Charting the edges of your role...</p></div>`;
+  let data;
+  try {
+    data = await api("/api/growth");
+  } catch (err) {
+    if (request !== state.explore.request || state.tab !== "explore") return;
+    if (state.growth) return toast(err.message);
+    view.innerHTML = `<div class="card center"><h2>Explore could not load</h2>
+      <p class="muted small">${esc(err.message)}</p>
+      <button class="btn small" id="retryExplore">Try again</button></div>`;
+    document.getElementById("retryExplore").onclick = renderExplore;
+    return;
+  }
+  if (request !== state.explore.request || state.tab !== "explore" || state.lesson) return;
+  const previousVisit = state.growth?.constellation?.visited_today;
+  state.growth = data;
+  if (state.explore.bossFeedback
+    && (state.explore.bossFeedback.week_key !== data.boss?.week_key
+      || (state.explore.bossFeedback.scenario_key && data.boss?.scenario_key
+        && state.explore.bossFeedback.scenario_key !== data.boss.scenario_key))) {
+    state.explore.bossFeedback = null;
+  }
+  if (previousVisit && !data.constellation?.visited_today) state.explore.visitSent = false;
+  applyRewardPayload(growthWallet(data));
+  applyCosmetics(data);
+  paintExplore();
+
+  if (data.constellation?.visited_today) state.explore.visitSent = true;
+  if (!data.constellation?.visited_today && !state.explore.visitSent) {
+    state.explore.visitSent = true;
+    api("/api/growth/constellation/visit", { method: "POST" })
+      .then((response) => {
+        applyRewardPayload(growthWallet(response));
+        if (state.tab === "explore" && !state.lesson) renderExplore();
+      })
+      .catch(() => { state.explore.visitSent = false; });
+  }
+}
+
+function startExploreReview() {
+  const questions = (state.growth?.review?.questions || []).slice(0, 3);
+  if (!questions.length) return toast("Nothing is due right now.");
+  state.explore.reviewRun = {
+    questions,
+    index: 0,
+    feedback: null,
+    results: [],
+    complete: false,
+  };
+  paintExplore();
+  document.getElementById("explore-review")?.scrollIntoView({ block: "start" });
+  focusExplore("[data-review-option]");
+}
+
+async function answerExploreReview(index, button) {
+  const run = state.explore.reviewRun;
+  const question = run?.questions?.[run.index];
+  if (!question || run.feedback) return;
+  view.querySelectorAll("[data-review-option]").forEach((option) => { option.disabled = true; });
+  busy(button, true, "Checking...");
+  try {
+    const response = await api("/api/growth/review/answer", {
+      method: "POST",
+      body: {
+        lesson_id: question.lesson_id,
+        question_index: question.question_index,
+        answer_index: index,
+      },
+    });
+    applyRewardPayload(growthWallet(response));
+    run.feedback = { ...response, selected: index };
+    run.results[run.index] = !!response.correct;
+    paintExplore();
+    focusExplore("[data-review-next]");
+  } catch (err) {
+    paintExplore();
+    focusExplore("[data-review-option]");
+    toast(err.message);
+  }
+}
+
+async function nextExploreReview() {
+  const run = state.explore.reviewRun;
+  if (!run?.feedback) return;
+  if (run.index + 1 < run.questions.length) {
+    run.index += 1;
+    run.feedback = null;
+    paintExplore();
+    document.getElementById("explore-review")?.scrollIntoView({ block: "start" });
+    focusExplore("[data-review-option]");
+    return;
+  }
+  run.complete = true;
+  run.feedback = null;
+  window.TangentCelebrate?.burst(42);
+  await renderExplore();
+  document.getElementById("explore-review")?.scrollIntoView({ block: "start" });
+  focusExplore("[data-review-start], #explore-review-title");
+}
+
+async function mutateGrowth(path, body, button, working, success, celebrate = false) {
+  const returnSectionId = button?.closest(".explore-section")?.id;
+  busy(button, true, working);
+  try {
+    const response = await api(`/api/growth${path}`, {
+      method: "POST",
+      body,
+    });
+    applyRewardPayload(growthWallet(response));
+    applyCosmetics(response);
+    if (success) toast(success);
+    if (celebrate) window.TangentCelebrate?.burst(38);
+    await renderExplore();
+    if (returnSectionId) {
+      const section = document.getElementById(returnSectionId);
+      const target = section?.querySelector("h2, h3, button:not([disabled])");
+      if (target) {
+        if (!target.matches("button, [tabindex]")) target.setAttribute("tabindex", "-1");
+        target.focus({ preventScroll: true });
+      }
+    }
+    return response;
+  } catch (err) {
+    busy(button, false);
+    toast(err.message);
+    return null;
+  }
+}
+
+function bindExplore() {
+  view.querySelectorAll("[data-explore-jump]").forEach((button) => {
+    button.onclick = () => document.getElementById(`explore-${button.dataset.exploreJump}`)
+      ?.scrollIntoView({
+        behavior: window.matchMedia?.("(prefers-reduced-motion: reduce)").matches
+          ? "auto" : "smooth",
+        block: "start",
+      });
+  });
+  view.querySelectorAll("[data-constellation-node]").forEach((button) => {
+    button.onclick = () => {
+      const index = Number(button.dataset.constellationNode);
+      const node = state.growth?.constellation?.nodes?.[index];
+      state.explore.nodeKey = constellationNodeKey(node, index);
+      paintExplore();
+      document.querySelector(".constellation-detail")?.scrollIntoView({ block: "nearest" });
+      focusExplore("[data-constellation-open], .constellation-detail");
+    };
+  });
+  view.querySelector("[data-constellation-open]")?.addEventListener("click", (event) => {
+    openLesson(Number(event.currentTarget.dataset.constellationOpen), event.currentTarget);
+  });
+  view.querySelectorAll("[data-review-start]").forEach((button) => {
+    button.onclick = startExploreReview;
+  });
+  view.querySelectorAll("[data-review-option]").forEach((button) => {
+    button.onclick = () => answerExploreReview(Number(button.dataset.reviewOption), button);
+  });
+  view.querySelector("[data-review-next]")?.addEventListener("click", nextExploreReview);
+  view.querySelectorAll("[data-mission-claim]").forEach((button) => {
+    button.onclick = () => mutateGrowth(
+      "/missions/claim", { key: button.dataset.missionClaim }, button,
+      "Claiming...", "Mission reward claimed.", true);
+  });
+  view.querySelectorAll("[data-boss-option]").forEach((button) => {
+    button.onclick = async () => {
+      view.querySelectorAll("[data-boss-option]").forEach((option) => { option.disabled = true; });
+      const response = await mutateGrowth(
+        "/boss/answer", {
+          answer_index: Number(button.dataset.bossOption),
+          scenario_key: state.growth?.boss?.scenario_key,
+        }, button,
+        "Checking...", "", false);
+      if (response) {
+        state.explore.bossFeedback = response;
+        if (response.correct) window.TangentCelebrate?.burst(72);
+        paintExplore();
+        document.getElementById("explore-boss")?.scrollIntoView({ block: "start" });
+        focusExplore(".boss-result h3, #explore-boss-title");
+      }
+    };
+  });
+  view.querySelectorAll("[data-workshop-buy]").forEach((button) => {
+    button.onclick = () => mutateGrowth(
+      "/workshop/purchase", { item_key: button.dataset.workshopBuy }, button,
+      "Buying...", "Added to your workshop.");
+  });
+  view.querySelectorAll("[data-workshop-equip]").forEach((button) => {
+    button.onclick = () => mutateGrowth(
+      "/workshop/equip", { item_key: button.dataset.workshopEquip }, button,
+      "Equipping...", "New look equipped.", true);
+  });
+
+  document.getElementById("circleCreateForm")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const button = event.currentTarget.querySelector("button");
+    const name = document.getElementById("circleName").value.trim();
+    if (name) mutateGrowth("/circles", { name }, button, "Creating...", "Circle created.");
+  });
+  document.getElementById("circleJoinForm")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const button = event.currentTarget.querySelector("button");
+    const inviteCode = document.getElementById("circleCode").value.trim();
+    if (inviteCode) mutateGrowth(
+      "/circles/join", { invite_code: inviteCode }, button, "Joining...", "Joined the circle.");
+  });
+  view.querySelectorAll("[data-circle-copy]").forEach((button) => {
+    button.onclick = async () => {
+      const code = button.dataset.circleCopy;
+      try {
+        await navigator.clipboard.writeText(code);
+        toast("Invite code copied.");
+      } catch {
+        toast(`Invite code: ${code}`, 5000);
+      }
+    };
+  });
+  view.querySelectorAll("[data-circle-leave]").forEach((button) => {
+    button.onclick = () => {
+      if (!window.confirm("Leave this private learning circle?")) return;
+      const id = encodeURIComponent(button.dataset.circleLeave);
+      mutateGrowth(`/circles/${id}/leave`, undefined, button, "Leaving...", "You left the circle.");
+    };
+  });
+}
+
+/* --- rewards --- */
+
+function streakMessage(status, current) {
+  if (status.active_today) return "Safe for today — you already finished a lesson.";
+  if (status.expired) {
+    return "That streak has ended. Finish a lesson today to begin a new one.";
+  }
+  if (status.protected) {
+    return `${status.missed_days} missed day${status.missed_days === 1 ? "" : "s"} will be covered automatically on your next finish.`;
+  }
+  if (status.at_risk) {
+    return `At risk: stock ${status.missed_days} freeze${status.missed_days === 1 ? "" : "s"} before your next finish to keep it.`;
+  }
+  return current > 0
+    ? "Finish a lesson today to extend it."
+    : "Finish your first lesson to light the flame.";
+}
+
+async function renderRewards() {
+  view.innerHTML = `<div class="card center"><span class="spinner"></span></div>`;
+  let data;
+  try { data = await api("/api/rewards"); }
+  catch (err) {
+    if (state.tab === "rewards") view.innerHTML = `<div class="card">${esc(err.message)}</div>`;
+    return;
+  }
+  if (state.tab !== "rewards" || state.lesson) return;
+  applyRewardPayload(data);
+  const currentStreak = displayStreak(state.user);
+
+  const hint = data.catalog.hint;
+  const freeze = data.catalog.streak_freeze;
+  const freezeFull = data.streak_freezes >= freeze.max_owned;
+  const hintAffordable = data.coins >= hint.price;
+  const freezeAffordable = data.coins >= freeze.price;
+
+  view.innerHTML = `
+    <div class="card wallet-hero">
+      <div class="coin-orb" aria-hidden="true">T</div>
+      <div>
+        <div class="tiny muted">Your balance</div>
+        <h1>${data.coins} coins</h1>
+        <p class="muted small">Earned by finishing new lessons. Never sold for money.</p>
+      </div>
+    </div>
+
+    <div class="inventory">
+      <div><span>💡</span><b>${data.hint_tokens}</b><small>hints ready</small></div>
+      <div><span>🧊</span><b>${data.streak_freezes}</b><small>freezes ready</small></div>
+      <div><span>🔥</span><b>${currentStreak}</b><small>day streak</small></div>
+    </div>
+
+    <div class="card streak-card ${data.streak_status.at_risk ? "at-risk" : ""}">
+      <div class="row">
+        <span class="streak-icon">🔥</span>
+        <div style="flex:1">
+          <h2>${currentStreak} day streak</h2>
+          <p class="muted small">${esc(streakMessage(
+            data.streak_status, currentStreak))}</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="row" style="align-items:flex-start">
+        <div style="flex:1">
+          <h2>Owl's counter</h2>
+          <p class="muted small">A little help, paid for by showing up.</p>
+        </div>
+        <span class="tag cat">No real money</span>
+      </div>
+      <div class="shop-grid">
+        <article class="shop-product">
+          <div class="product-icon">💡</div>
+          <div class="product-copy">
+            <h3>${esc(hint.name)}</h3>
+            <p class="muted small">${esc(hint.description)}</p>
+            <div class="owned">${data.hint_tokens} ready</div>
+          </div>
+          <button class="btn small" data-buy="hint" ${hintAffordable ? "" : "disabled"}>
+            ${hintAffordable ? `${hint.price} coins` : `Need ${hint.price - data.coins} more`}
+          </button>
+        </article>
+        <article class="shop-product">
+          <div class="product-icon">🧊</div>
+          <div class="product-copy">
+            <h3>${esc(freeze.name)}</h3>
+            <p class="muted small">${esc(freeze.description)}</p>
+            <div class="owned">${data.streak_freezes}/${freeze.max_owned} stocked</div>
+          </div>
+          <button class="btn small" data-buy="streak_freeze" ${
+            !freezeFull && freezeAffordable ? "" : "disabled"}>
+            ${freezeFull ? "Inventory full"
+              : freezeAffordable ? `${freeze.price} coins` : `Need ${freeze.price - data.coins} more`}
+          </button>
+        </article>
+      </div>
+      <p class="tiny muted center" style="margin-top:14px">Freezes apply automatically.
+        A hint removes one wrong answer and can only be used once per question.</p>
+    </div>`;
+
+  view.querySelectorAll("[data-buy]").forEach((button) => {
+    button.onclick = () => buyReward(button.dataset.buy, button);
+  });
+}
+
+async function buyReward(item, button) {
+  busy(button, true, "Buying…");
+  try {
+    const data = await api("/api/rewards/purchase", {
+      method: "POST", body: { item },
+    });
+    applyRewardPayload(data);
+    toast(item === "hint" ? "Hint ready for your next question." : "Streak freeze stocked.");
+    if (state.tab === "rewards" && !state.lesson) renderRewards();
+  } catch (err) {
+    busy(button, false);
+    toast(err.message);
+  }
+}
+
 /* --- progress --- */
 
 async function renderProgress() {
@@ -1485,6 +2561,9 @@ async function renderProgress() {
   let data;
   try { data = await api("/api/progress"); }
   catch (err) { view.innerHTML = `<div class="card">${esc(err.message)}</div>`; return; }
+  if (state.tab !== "progress" || state.lesson) return;
+  applyRewardPayload(data);
+  const currentStreak = data.streak_status?.expired ? 0 : data.current_streak;
 
   const active = new Set(data.active_days);
   // Local dates, not toISOString() — the server stamps days in its own local
@@ -1506,10 +2585,13 @@ async function renderProgress() {
       <p class="tiny muted" style="margin-top:6px">${data.xp} XP total ·
         ${100 - data.xp_into_level} to next level</p>
       <div class="rewards">
-        <div class="reward"><div class="n">🔥 ${data.current_streak}</div><div class="tiny muted">current streak</div></div>
+        <div class="reward"><div class="n">🔥 ${currentStreak}</div><div class="tiny muted">current streak</div></div>
         <div class="reward"><div class="n">${data.longest_streak}</div><div class="tiny muted">longest</div></div>
         <div class="reward"><div class="n">${data.lessons_completed}</div><div class="tiny muted">lessons</div></div>
+        <div class="reward coin-reward"><div class="n">${data.coins}</div><div class="tiny muted">coin balance</div></div>
       </div>
+      <button class="btn subtle wide" id="progressRewards">Open rewards · ${
+        data.hint_tokens} 💡 · ${data.streak_freezes} 🧊</button>
       <h3 style="margin-top:18px">Last 30 days</h3>
       <div class="heat">${cells.join("")}</div>
     </div>
@@ -1524,7 +2606,7 @@ async function renderProgress() {
               h.picked_by === "shared"
                 ? `From ${esc(h.author || "someone")}`
                 : h.picked_by === "app" ? "Tangent's pick" : "Your pick"}
-              · ${h.score}/${h.total} · +${h.xp} XP</div>
+              · ${h.score}/${h.total} · +${h.xp} XP · +${h.coins || 0} coins</div>
           </div>
           <button class="btn small subtle" data-share="${h.id}" title="Share this lesson">
             ${h.share_token ? "Link" : "Share"}</button>
@@ -1536,6 +2618,7 @@ async function renderProgress() {
   view.querySelectorAll("[data-open]").forEach((b) => {
     b.onclick = () => openLesson(Number(b.dataset.open), b);
   });
+  document.getElementById("progressRewards").onclick = () => setTab("rewards");
 
   view.querySelectorAll("[data-share]").forEach((b) => {
     b.onclick = () => shareLesson(Number(b.dataset.share), b, document.getElementById("shareSlot"));
@@ -1788,6 +2871,13 @@ function renderProfile() {
         state.user = null;
         state.digest = null;
         state.observations = [];
+        state.growth = null;
+        state.growthPriming = null;
+        state.explore.reviewRun = null;
+        state.explore.bossFeedback = null;
+        state.explore.nodeKey = "";
+        state.explore.visitSent = false;
+        applyCosmetics(null, { clear: true });
         render();
         toast("Your account and everything in it is gone.");
       } catch (err) { busy(button, false); toast(err.message); }
@@ -1812,6 +2902,7 @@ function renderProfile() {
 
   try {
     state.user = await api("/api/auth/me");
+    primeGrowthCosmetics();
     if (!state.shared) {
       await loadToday();
       setTab("today");
@@ -1822,3 +2913,13 @@ function renderProfile() {
 
   render();
 })();
+
+/* Installable web-app foundation. The worker caches only the application
+   shell; authenticated API data remains network-only. */
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/sw.js").catch(() => {
+      /* Installation is an enhancement; the live app keeps working without it. */
+    });
+  });
+}

@@ -18,10 +18,28 @@ window.Owl = (function () {
   /* One SVG, parts tagged for animation. Colours come from the palette the
      redesign established, not from theme tokens — the owl should look like
      itself in light and dark alike. */
-  function svg(size = 96, mood = "idle") {
+  function accessoryKind(value) {
+    const key = String(value || "").toLowerCase();
+    if (!key) return "";
+    if (key.includes("star") && key.includes("glass")) return "star-glasses";
+    if (key.includes("cap") || key.includes("scholar")) return "cap";
+    if (key.includes("crown")) return "crown";
+    if (key.includes("scarf")) return "scarf";
+    if (key.includes("monocle")) return "monocle";
+    if (key.includes("bow")) return "bow";
+    return "pin";
+  }
+
+  function svg(size = 96, mood = "idle", accessory) {
+    const equipped = accessory === undefined
+      ? document.documentElement.dataset.owlCosmetic
+      : accessory;
+    const safeAccessory = String(equipped || "").toLowerCase().replace(/[^a-z0-9_-]/g, "");
+    const kind = accessoryKind(safeAccessory);
     return `
 <svg class="owl-svg is-${mood}" viewBox="0 0 120 128" width="${size}" height="${size * 128 / 120}"
-     role="img" aria-label="Tangent, the owl" focusable="false">
+     role="img" aria-label="Tangent, the owl" focusable="false"
+     data-accessory="${safeAccessory}" data-accessory-kind="${kind}">
   <g class="owl-all">
     <!-- wings, animated for waving and celebrating -->
     <ellipse class="owl-wing owl-wing-l" cx="30" cy="80" rx="9" ry="17" fill="#5d5294"/>
@@ -86,13 +104,51 @@ window.Owl = (function () {
         <circle cx="96" cy="55" r="4.5" fill="#e8b657"/>
       </g>
     </g>
+
+    <!-- Workshop accessories. Only the equipped group is revealed in CSS. -->
+    <g class="owl-accessory owl-accessory-scarf">
+      <path d="M37 90q23 10 46 0l-3 10q-20 9-40 0z" fill="#e78aa8"/>
+      <path d="M75 96l9 1-3 24-10-2z" fill="#cf6c91"/>
+      <path d="M75 106h7M74 112h7" stroke="#ffd0df" stroke-width="2"/>
+    </g>
+    <g class="owl-accessory owl-accessory-crown">
+      <path d="M43 28l5-13 12 10 12-10 5 13z" fill="#f2c45f" stroke="#fff0a8" stroke-width="2"/>
+      <circle cx="48" cy="18" r="2.5" fill="#d67a9c"/>
+      <circle cx="60" cy="24" r="2.5" fill="#9184d9"/>
+      <circle cx="72" cy="18" r="2.5" fill="#5cb5b0"/>
+    </g>
+    <g class="owl-accessory owl-accessory-cap">
+      <path d="M60 20l34 14-34 14-34-14z" fill="#7768c4" stroke="#c8c1ff" stroke-width="1.5"/>
+      <path d="M44 43h32v6q-16 10-32 0z" fill="#5d5294"/>
+      <path d="M91 35v17" stroke="#f2c45f" stroke-width="2.4"/>
+      <circle cx="91" cy="55" r="3.5" fill="#f2c45f"/>
+    </g>
+    <g class="owl-accessory owl-accessory-star-glasses" fill="#f2c45f"
+       stroke="#fff0a8" stroke-width="1.4" stroke-linejoin="round">
+      <path d="M46 51l4.8 9.5 10.5 1.5-7.6 7.4 1.8 10.5-9.5-5-9.5 5 1.8-10.5-7.6-7.4 10.5-1.5z"/>
+      <path d="M74 51l4.8 9.5 10.5 1.5-7.6 7.4 1.8 10.5-9.5-5-9.5 5 1.8-10.5-7.6-7.4 10.5-1.5z"/>
+      <circle cx="46" cy="67" r="8" fill="#f3f5fe" stroke="#e8b657"/>
+      <circle cx="74" cy="67" r="8" fill="#f3f5fe" stroke="#e8b657"/>
+    </g>
+    <g class="owl-accessory owl-accessory-monocle" fill="none" stroke="#f2c45f">
+      <circle cx="75" cy="68" r="17" stroke-width="2.5"/>
+      <path d="M90 79q7 14 1 31" stroke-width="2"/>
+    </g>
+    <g class="owl-accessory owl-accessory-bow">
+      <path d="M52 91q-14-10-15 5 1 14 15 3zM68 91q14-10 15 5-1 14-15 3z" fill="#5cb5b0"/>
+      <circle cx="60" cy="96" r="7" fill="#86dcd6"/>
+    </g>
+    <g class="owl-accessory owl-accessory-pin">
+      <path d="M77 85l2.2 4.6 5 .7-3.6 3.5.9 5-4.5-2.4-4.5 2.4.9-5-3.6-3.5 5-.7z"
+            fill="#f2c45f" stroke="#fff0a8" stroke-width="1.2"/>
+    </g>
   </g>
 </svg>`;
   }
 
-  function render({ size = 96, mood = "idle", bubble = "" } = {}) {
+  function render({ size = 96, mood = "idle", bubble = "", accessory } = {}) {
     return `<div class="owl" data-mood="${mood}">
-      ${svg(size, mood)}
+      ${svg(size, mood, accessory)}
       ${bubble ? `<div class="owl-bubble">${bubble}</div>` : ""}
     </div>`;
   }
