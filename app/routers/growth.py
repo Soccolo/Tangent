@@ -16,6 +16,13 @@ from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session as OrmSession
 
+from ..cosmetics import (
+    EQUIPPED_FIELDS,
+    WORKSHOP_BY_KEY,
+    WORKSHOP_CATALOG,
+    equipped_cosmetics,
+    owl_profile_picture,
+)
 from ..db import get_db
 from ..gamification import STARTER_COINS, user_day, user_today, wallet
 from ..models import (
@@ -81,57 +88,6 @@ CIRCLE_WEEKLY_GOAL = 12
 CIRCLE_LESSON_POINTS = 3
 CIRCLE_REVIEW_POINTS = 1
 CIRCLE_MAX_MEMBERS = 12
-
-WORKSHOP_CATALOG = (
-    {
-        "key": "owl_scholar_cap",
-        "name": "Scholar's cap",
-        "description": "A small violet cap for Tangent.",
-        "slot": "owl_accessory",
-        "price": 45,
-        "preview": "🎓",
-    },
-    {
-        "key": "owl_star_glasses",
-        "name": "Star glasses",
-        "description": "A brighter look for ambitious tangents.",
-        "slot": "owl_accessory",
-        "price": 70,
-        "preview": "🤩",
-    },
-    {
-        "key": "desk_fern",
-        "name": "Desk fern",
-        "description": "Something green beside the lesson cards.",
-        "slot": "desk_item",
-        "price": 55,
-        "preview": "🌿",
-    },
-    {
-        "key": "cards_aurora",
-        "name": "Aurora cards",
-        "description": "A soft northern-light treatment for concept cards.",
-        "slot": "card_theme",
-        "price": 80,
-        "preview": "aurora",
-    },
-    {
-        "key": "celebration_stars",
-        "name": "Star shower",
-        "description": "Trade confetti for a shower of tiny stars.",
-        "slot": "celebration",
-        "price": 65,
-        "preview": "✨",
-    },
-)
-WORKSHOP_BY_KEY = {item["key"]: item for item in WORKSHOP_CATALOG}
-EQUIPPED_FIELDS = {
-    "owl_accessory": "equipped_owl_accessory",
-    "desk_item": "equipped_desk_item",
-    "card_theme": "equipped_card_theme",
-    "celebration": "equipped_celebration",
-}
-
 
 def _week_start(today: date) -> date:
     return today - timedelta(days=today.weekday())
@@ -417,10 +373,7 @@ def _boss_payload(
 
 
 def _equipped(user: User) -> dict:
-    return {
-        slot: getattr(user, field)
-        for slot, field in EQUIPPED_FIELDS.items()
-    }
+    return equipped_cosmetics(user)
 
 
 def _workshop_payload(db: OrmSession, user: User) -> dict:
@@ -502,7 +455,7 @@ def _circle_payload(
         members.append(
             {
                 "display_name": member.display_name or "Learner",
-                "avatar": member.avatar,
+                "profile_picture": owl_profile_picture(member),
                 **contribution,
             }
         )
@@ -862,6 +815,9 @@ def purchase_workshop_item(
             status.HTTP_400_BAD_REQUEST,
             f"You need {item['price']} coins for that.",
         )
+    auto_equipped = item["slot"] == "owl_accessory"
+    if auto_equipped:
+        user.equipped_owl_accessory = body.item_key
     db.commit()
     db.refresh(user)
     return {
@@ -869,7 +825,9 @@ def purchase_workshop_item(
         "purchased": True,
         "owned": True,
         "already_owned": False,
+        "auto_equipped": auto_equipped,
         "wallet": wallet(user),
+        "profile_picture": owl_profile_picture(user),
         "workshop": _workshop_payload(db, user),
     }
 
@@ -897,6 +855,25 @@ def equip_workshop_item(
         "item_key": body.item_key,
         "equipped": True,
         "equipped_items": _equipped(user),
+        "profile_picture": owl_profile_picture(user),
+        "workshop": _workshop_payload(db, user),
+    }
+
+
+@router.post("/workshop/classic")
+def equip_classic_owl(
+    user: User = Depends(current_user),
+    db: OrmSession = Depends(get_db),
+):
+    """Return to the bundled classic owl without changing item ownership."""
+
+    user.equipped_owl_accessory = None
+    db.commit()
+    return {
+        "classic": True,
+        "equipped": True,
+        "equipped_items": _equipped(user),
+        "profile_picture": owl_profile_picture(user),
         "workshop": _workshop_payload(db, user),
     }
 

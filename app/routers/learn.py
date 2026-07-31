@@ -8,6 +8,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session as OrmSession
 
+from ..cosmetics import owl_profile_picture
 from ..config import (
     DAILY_CAPTURE_CAP,
     LIBRARY_REUSE,
@@ -723,7 +724,7 @@ def view_shared(
         "title": lesson.topic_title,
         "blurb": lesson.topic_blurb,
         "author": lesson.author_name or (author.display_name if author else "someone"),
-        "author_avatar": author.avatar if author else None,
+        "author_profile_picture": owl_profile_picture(author) if author else None,
         "content": json.loads(lesson.content_json),
     }
 

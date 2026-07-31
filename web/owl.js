@@ -27,18 +27,28 @@ window.Owl = (function () {
     if (key.includes("scarf")) return "scarf";
     if (key.includes("monocle")) return "monocle";
     if (key.includes("bow")) return "bow";
-    return "pin";
+    if (key.includes("pin") || key.includes("constellation")) return "pin";
+    return "";
   }
 
-  function svg(size = 96, mood = "idle", accessory) {
+  const escapeAttribute = (value) => String(value || "").replace(/[&<>"']/g, (character) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  }[character]));
+
+  function svg(size = 96, mood = "idle", accessory, {
+    label = "Tangent, the owl", decorative = false,
+  } = {}) {
     const equipped = accessory === undefined
       ? document.documentElement.dataset.owlCosmetic
       : accessory;
     const safeAccessory = String(equipped || "").toLowerCase().replace(/[^a-z0-9_-]/g, "");
     const kind = accessoryKind(safeAccessory);
+    const accessible = decorative
+      ? 'aria-hidden="true" focusable="false"'
+      : `role="img" aria-label="${escapeAttribute(label)}" focusable="false"`;
     return `
 <svg class="owl-svg is-${mood}" viewBox="0 0 120 128" width="${size}" height="${size * 128 / 120}"
-     role="img" aria-label="Tangent, the owl" focusable="false"
+     ${accessible}
      data-accessory="${safeAccessory}" data-accessory-kind="${kind}">
   <g class="owl-all">
     <!-- wings, animated for waving and celebrating -->
@@ -146,9 +156,12 @@ window.Owl = (function () {
 </svg>`;
   }
 
-  function render({ size = 96, mood = "idle", bubble = "", accessory } = {}) {
+  function render({
+    size = 96, mood = "idle", bubble = "", accessory,
+    label = "Tangent, the owl", decorative = false,
+  } = {}) {
     return `<div class="owl" data-mood="${mood}">
-      ${svg(size, mood, accessory)}
+      ${svg(size, mood, accessory, { label, decorative })}
       ${bubble ? `<div class="owl-bubble">${bubble}</div>` : ""}
     </div>`;
   }

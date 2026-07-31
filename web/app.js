@@ -22,6 +22,7 @@ const state = {
   explore: {
     request: 0,
     nodeKey: "",
+    jumpTo: "",
     visitSent: false,
     reviewRun: null,
     bossFeedback: null,
@@ -76,12 +77,6 @@ function busy(button, on, label) {
   }
 }
 
-const initials = (name, email) =>
-  (String(name || email || "?").trim()[0] || "?").toUpperCase();
-
-// Avatars are data: URLs we validated server-side (raster only, never SVG).
-const avatarStyle = (url) => (url ? `background-image:url("${url}")` : "");
-
 function applyAccent(accent) {
   const root = document.documentElement;
   if (accent) root.setAttribute("data-accent", accent);
@@ -127,6 +122,40 @@ function cosmeticKey(value) {
   return String(raw || "").toLowerCase().replace(/[^a-z0-9_-]/g, "");
 }
 
+const OWL_ACCESSORY_NAMES = {
+  owl_constellation_pin: "Constellation pin",
+  owl_star_pin: "North Star pin",
+  owl_scholar_cap: "Scholar's cap",
+  owl_curious_scarf: "Curious scarf",
+  owl_scarf: "Explorer scarf",
+  owl_teal_bow: "Teal bow tie",
+  owl_bow: "Teal bow",
+  owl_star_glasses: "Star glasses",
+};
+
+function profilePictureAccessory(profilePicture, fallbackAccessory = "") {
+  const descriptorAccessory = profilePicture?.kind === "owl"
+    ? profilePicture.owl?.accessory
+    : "";
+  return cosmeticKey(descriptorAccessory || fallbackAccessory);
+}
+
+function owlAccessoryName(accessory) {
+  const key = cosmeticKey(accessory);
+  if (!key) return "Classic Tangent";
+  const item = state.growth?.workshop?.items?.find((entry) =>
+    cosmeticKey(entry.key ?? entry.item_key) === key);
+  return item?.name || OWL_ACCESSORY_NAMES[key] || "custom look";
+}
+
+function owlAvatarMarkup(profilePicture, {
+  fallbackAccessory = "", size = 32, mood = "idle",
+  label = "Tangent owl", decorative = false,
+} = {}) {
+  const accessory = profilePictureAccessory(profilePicture, fallbackAccessory);
+  return Owl.svg(size, mood, accessory, { label, decorative });
+}
+
 /* Both /auth/me and /growth may carry equipped cosmetics. Accept the compact
    slot map as well as item records so the global look applies immediately
    after boot, purchase or equip without coupling this client to one serializer. */
@@ -162,7 +191,7 @@ function cosmeticsFrom(source) {
 
   const direct = {
     owl: source.owl_cosmetic ?? source.equipped_owl ?? source.owl_accessory
-      ?? source.equipped_owl_accessory,
+      ?? source.equipped_owl_accessory ?? source.profile_picture?.owl?.accessory,
     desk: source.desk_cosmetic ?? source.equipped_desk ?? source.desk_item
       ?? source.equipped_desk_item,
     card: source.card_cosmetic ?? source.equipped_card ?? source.card_skin
@@ -226,10 +255,12 @@ function paintStats() {
   document.getElementById("streakNum").textContent = displayStreak(state.user);
   document.getElementById("coinNum").textContent = state.user.coins || 0;
   document.getElementById("xpNum").textContent = state.user.xp;
-  avatarBtn.style.cssText = avatarStyle(state.user.avatar);
-  avatarBtn.textContent = state.user.avatar
-    ? ""
-    : initials(state.user.display_name, state.user.email);
+  avatarBtn.removeAttribute("style");
+  avatarBtn.innerHTML = owlAvatarMarkup(state.user.profile_picture, {
+    fallbackAccessory: state.cosmetics.owl,
+    size: 30,
+    decorative: true,
+  });
 }
 
 function applyRewardPayload(data) {
@@ -242,6 +273,7 @@ function applyRewardPayload(data) {
     streak_freezes: data.streak_freezes ?? state.user.streak_freezes,
     streak_status: data.streak_status ?? state.user.streak_status,
     reward_catalog: data.catalog || data.reward_catalog || state.user.reward_catalog,
+    profile_picture: data.profile_picture ?? state.user.profile_picture,
     equipped_cosmetics: Object.keys(equippedCosmetics).length
       ? { ...(state.user.equipped_cosmetics || {}), ...equippedCosmetics }
       : state.user.equipped_cosmetics,
@@ -317,6 +349,7 @@ function setTab(tab) {
   state.tab = tab;
   [...tabs.querySelectorAll("button")].forEach((b) =>
     b.classList.toggle("active", b.dataset.tab === tab));
+  window.scrollTo({ top: 0, behavior: "auto" });
   render();
 }
 
@@ -1697,8 +1730,11 @@ async function renderShared() {
   view.innerHTML = `
     <div class="card">
       <div class="byline">
-        <span class="who" style="${avatarStyle(s.author_avatar)}">${
-          s.author_avatar ? "" : esc(initials(s.author))}</span>
+        <span class="who owl-avatar">${owlAvatarMarkup(s.author_profile_picture, {
+          fallbackAccessory: s.author_owl_accessory || "",
+          size: 24,
+          decorative: true,
+        })}</span>
         <span><b>${esc(s.author)}</b> shared this lesson with you</span>
       </div>
       <h1>${esc(s.content.title || s.title)}</h1>
@@ -2046,7 +2082,7 @@ function workshopPreview(item) {
   const key = cosmeticKey(item.key ?? item.item_key);
   if (slot === "owl") {
     return `<div class="workshop-preview owl-preview">${Owl.render({
-      size: 60, mood: "proud", accessory: key,
+      size: 60, mood: "proud", accessory: key, decorative: true,
     })}</div>`;
   }
   if (slot === "card") {
@@ -2070,6 +2106,9 @@ function workshopPreview(item) {
 
 function workshopMarkup(workshop = {}, coins = 0) {
   const items = Array.isArray(workshop.items) ? workshop.items : [];
+  const equippedOwl = profilePictureAccessory(
+    state.user?.profile_picture, state.cosmetics.owl);
+  const equippedOwlName = owlAccessoryName(equippedOwl);
   return `
     <section class="explore-section card workshop-card" id="explore-workshop"
       aria-labelledby="explore-workshop-title">
@@ -2077,19 +2116,38 @@ function workshopMarkup(workshop = {}, coins = 0) {
         <div><span class="eyebrow">Make Tangent yours</span><h2 id="explore-workshop-title">Owl Workshop</h2></div>
         <span class="workshop-balance"><span class="coin-mini" aria-hidden="true">T</span> ${growthNumber(coins)}</span>
       </div>
-      <p class="muted small">Coins unlock appearance only. Preview, collect, and equip a little personality.</p>
+      <p class="muted small">Your owl is your profile picture. Earn coins, choose a look, and Tangent will wear it everywhere.</p>
+      <div class="workshop-owl-identity">
+        <div class="workshop-owl-stage">${Owl.render({
+          size: 88,
+          mood: "proud",
+          accessory: equippedOwl,
+          label: equippedOwl
+            ? `Your Tangent owl wearing ${equippedOwlName}`
+            : "Your classic Tangent owl",
+        })}</div>
+        <div class="workshop-owl-copy">
+          <span class="eyebrow">Your owl</span>
+          <h3>${esc(equippedOwlName)}</h3>
+          <p class="tiny muted">This look appears on your profile, in learning circles, and on shared lessons.</p>
+          ${equippedOwl
+            ? `<button class="btn ghost small" data-workshop-classic>Use classic look</button>`
+            : `<span class="workshop-current">Wearing the classic look</span>`}
+        </div>
+      </div>
       <div class="workshop-grid">${items.length ? items.map((item) => {
         const key = cosmeticKey(item.key ?? item.item_key);
+        const owlItem = cosmeticSlot(item.slot || item.type) === "owl";
         const equipped = itemEquipped(item, workshop.equipped);
         const affordable = growthNumber(coins) >= growthNumber(item.price);
         return `<article class="workshop-item ${equipped ? "equipped" : ""}">
           ${workshopPreview(item)}
           <div class="workshop-copy"><h3>${esc(item.name || key)}</h3>
             <p class="tiny muted">${esc(item.description || item.preview || "")}</p></div>
-          ${equipped ? `<button class="btn ghost small" disabled>Equipped</button>`
-            : item.owned ? `<button class="btn small" data-workshop-equip="${key}">Equip</button>`
+          ${equipped ? `<button class="btn ghost small" disabled>${owlItem ? "Wearing" : "Equipped"}</button>`
+            : item.owned ? `<button class="btn small" data-workshop-equip="${key}">${owlItem ? "Wear this" : "Equip"}</button>`
             : `<button class="btn small" data-workshop-buy="${key}" ${affordable ? "" : "disabled"}>
-                ${affordable ? `${growthNumber(item.price)} coins`
+                ${affordable ? `${owlItem ? "Buy & wear" : "Buy"} · ${growthNumber(item.price)} T`
                   : `Need ${Math.max(0, growthNumber(item.price) - growthNumber(coins))} more`}
               </button>`}
         </article>`;
@@ -2135,8 +2193,11 @@ function circlesMarkup(circles = []) {
             <div class="progress"><i style="width:${growthPercent(progress, goal)}%"></i></div></div>
           <div class="circle-members">${(circle.members || []).map((member) => `
             <div class="circle-member">
-              <span class="circle-avatar" style="${avatarStyle(member.avatar)}">${
-                member.avatar ? "" : esc(initials(member.display_name || member.name))}</span>
+              <span class="circle-avatar owl-avatar">${owlAvatarMarkup(member.profile_picture, {
+                fallbackAccessory: member.owl_accessory || "",
+                size: 26,
+                decorative: true,
+              })}</span>
               <span>${esc(member.display_name || member.name || "Member")}</span>
               <b>+${growthNumber(member.contribution)}</b>
             </div>`).join("")}</div>
@@ -2173,6 +2234,15 @@ function paintExplore() {
     ${workshopMarkup(data.workshop, coins)}
     ${circlesMarkup(data.circles)}`;
   bindExplore();
+  if (state.explore.jumpTo) {
+    const jumpTo = state.explore.jumpTo;
+    state.explore.jumpTo = "";
+    requestAnimationFrame(() => {
+      const section = document.getElementById(`explore-${jumpTo}`);
+      section?.scrollIntoView({ block: "start" });
+      focusExplore(`#explore-${jumpTo}`);
+    });
+  }
 }
 
 function focusExplore(selector) {
@@ -2390,14 +2460,39 @@ function bindExplore() {
     };
   });
   view.querySelectorAll("[data-workshop-buy]").forEach((button) => {
-    button.onclick = () => mutateGrowth(
-      "/workshop/purchase", { item_key: button.dataset.workshopBuy }, button,
-      "Buying...", "Added to your workshop.");
+    button.onclick = () => {
+      const key = button.dataset.workshopBuy;
+      const item = state.growth?.workshop?.items?.find((entry) =>
+        cosmeticKey(entry.key ?? entry.item_key) === key);
+      const owlItem = cosmeticSlot(item?.slot || item?.type) === "owl";
+      return mutateGrowth(
+        "/workshop/purchase", { item_key: key }, button,
+        owlItem ? "Buying & wearing..." : "Buying...",
+        owlItem
+          ? `${item?.name || owlAccessoryName(key)} is now your profile look.`
+          : `${item?.name || "New look"} was added to your workshop.`,
+        owlItem);
+    };
   });
   view.querySelectorAll("[data-workshop-equip]").forEach((button) => {
-    button.onclick = () => mutateGrowth(
-      "/workshop/equip", { item_key: button.dataset.workshopEquip }, button,
-      "Equipping...", "New look equipped.", true);
+    button.onclick = () => {
+      const key = button.dataset.workshopEquip;
+      const item = state.growth?.workshop?.items?.find((entry) =>
+        cosmeticKey(entry.key ?? entry.item_key) === key);
+      const owlItem = cosmeticSlot(item?.slot || item?.type) === "owl";
+      return mutateGrowth(
+        "/workshop/equip", { item_key: key }, button,
+        owlItem ? "Changing your owl..." : "Equipping...",
+        owlItem
+          ? `${item?.name || owlAccessoryName(key)} is now your profile look.`
+          : `${item?.name || "New look"} is now equipped.`,
+        true);
+    };
+  });
+  view.querySelector("[data-workshop-classic]")?.addEventListener("click", (event) => {
+    mutateGrowth(
+      "/workshop/classic", undefined, event.currentTarget,
+      "Restoring...", "Classic Tangent is now your profile look.", true);
   });
 
   document.getElementById("circleCreateForm")?.addEventListener("submit", (event) => {
@@ -2629,55 +2724,31 @@ async function renderProgress() {
 
 const ACCENTS = ["violet", "ember", "teal", "rose", "lime"];
 
-/* Resize client-side before upload: a phone photo is several megabytes, and
-   the avatar renders at 68px. Keeps the row small enough to live in Postgres. */
-function resizeToDataUrl(file, size = 256) {
-  return new Promise((resolve, reject) => {
-    if (!/^image\/(png|jpe?g|webp)$/i.test(file.type)) {
-      reject(new Error("Pick a PNG, JPEG or WebP image."));
-      return;
-    }
-    const reader = new FileReader();
-    reader.onerror = () => reject(new Error("Couldn't read that file."));
-    reader.onload = () => {
-      const img = new Image();
-      img.onerror = () => reject(new Error("That file isn't a readable image."));
-      img.onload = () => {
-        const side = Math.min(img.width, img.height);      // centre-crop to square
-        const canvas = document.createElement("canvas");
-        canvas.width = canvas.height = size;
-        const ctx = canvas.getContext("2d");
-        ctx.drawImage(img, (img.width - side) / 2, (img.height - side) / 2,
-                      side, side, 0, 0, size, size);
-        resolve(canvas.toDataURL("image/jpeg", 0.85));
-      };
-      img.src = reader.result;
-    };
-    reader.readAsDataURL(file);
-  });
-}
-
 function renderProfile() {
   const u = state.user;
-  let pendingAvatar;  // undefined = unchanged, null = remove, string = new image
+  const owlAccessory = profilePictureAccessory(u.profile_picture, state.cosmetics.owl);
+  const owlName = owlAccessoryName(owlAccessory);
 
   view.innerHTML = `
     <div class="card">
       <h2>Your profile</h2>
       <p class="muted small">${esc(u.email)}</p>
 
-      <div class="avatar-edit" style="margin-top:16px">
-        <div class="avatar-preview" id="avatarPreview" style="${avatarStyle(u.avatar)}">${
-          u.avatar ? "" : esc(initials(u.display_name, u.email))}</div>
-        <div class="stack" style="flex:1">
-          <div class="row wrap">
-            <button class="btn small subtle" id="pickAvatar" type="button">Upload photo</button>
-            <button class="btn small ghost ${u.avatar ? "" : "hidden"}" id="removeAvatar" type="button">Remove</button>
-          </div>
-          <p class="tiny muted">Square works best. Resized to 256px in your browser
-            before it's sent.</p>
+      <div class="owl-profile-card" style="margin-top:16px">
+        <div class="profile-owl-avatar">${owlAvatarMarkup(u.profile_picture, {
+          fallbackAccessory: state.cosmetics.owl,
+          size: 92,
+          mood: "proud",
+          label: owlAccessory
+            ? `Your customised owl wearing ${owlName}`
+            : "Your classic Tangent owl",
+        })}</div>
+        <div class="owl-profile-copy">
+          <span class="eyebrow">${esc(owlName)}</span>
+          <h3>Your Tangent owl</h3>
+          <p class="small muted">This is how you'll appear in learning circles and shared lessons.</p>
+          <button class="btn small" id="customizeOwl" type="button">Change my owl</button>
         </div>
-        <input type="file" id="avatarFile" accept="image/png,image/jpeg,image/webp" class="hidden">
       </div>
 
       <form id="profileForm" class="stack">
@@ -2762,29 +2833,9 @@ function renderProfile() {
       <div id="deleteSlot"></div>
     </div>`;
 
-  const preview = document.getElementById("avatarPreview");
-  const fileInput = document.getElementById("avatarFile");
-  const removeBtn = document.getElementById("removeAvatar");
-
-  document.getElementById("pickAvatar").onclick = () => fileInput.click();
-  fileInput.onchange = async () => {
-    const file = fileInput.files && fileInput.files[0];
-    if (!file) return;
-    try {
-      pendingAvatar = await resizeToDataUrl(file);
-      preview.style.cssText = avatarStyle(pendingAvatar);
-      preview.textContent = "";
-      removeBtn.classList.remove("hidden");
-    } catch (err) { toast(err.message); }
-    fileInput.value = "";  // let the same file be picked again after a failure
-  };
-
-  removeBtn.onclick = () => {
-    pendingAvatar = null;
-    preview.style.cssText = "";
-    preview.textContent = initials(
-      document.getElementById("name").value || u.display_name, u.email);
-    removeBtn.classList.add("hidden");
+  document.getElementById("customizeOwl").onclick = () => {
+    state.explore.jumpTo = "workshop";
+    setTab("explore");
   };
 
   document.getElementById("themePick").onclick = (e) => {
@@ -2827,9 +2878,7 @@ function renderProfile() {
         contribute_to_library: document.getElementById("contribute").checked,
         default_level: Number(defLevel.value),
       };
-      if (pendingAvatar !== undefined) body.avatar = pendingAvatar;
       state.user = await api("/api/auth/me", { method: "PATCH", body });
-      pendingAvatar = undefined;
       paintStats();
       busy(button, false);
       toast("Saved");
