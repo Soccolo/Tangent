@@ -9,6 +9,7 @@ const state = {
   digest: null,
   activities: [],
   saved: [],         // shared lessons added from someone else's link
+  study: null,      // private PDFs and practice; cleared on sign-out
   introing: false,   // replaying the intro from Profile
   introStep: 0,
   introDraft: null,
@@ -34,10 +35,11 @@ const state = {
 /* ------------------------------------------------------------------ utils */
 
 async function api(path, { method = "GET", body } = {}) {
+  const multipart = body instanceof FormData;
   const res = await fetch(path, {
     method,
-    headers: body ? { "Content-Type": "application/json" } : {},
-    body: body ? JSON.stringify(body) : undefined,
+    headers: body && !multipart ? { "Content-Type": "application/json" } : {},
+    body: multipart ? body : body ? JSON.stringify(body) : undefined,
   });
   if (res.status === 204) return null;
   const data = await res.json().catch(() => ({}));
@@ -308,6 +310,7 @@ async function signOut() {
   state.digest = null;
   state.lesson = null;
   state.shared = null;
+  state.study = null;
   state.growth = null;
   state.growthPriming = null;
   state.explore.reviewRun = null;
@@ -347,8 +350,14 @@ document.getElementById("avatarBtn").onclick = () => {
 
 function setTab(tab) {
   state.tab = tab;
-  [...tabs.querySelectorAll("button")].forEach((b) =>
-    b.classList.toggle("active", b.dataset.tab === tab));
+  [...tabs.querySelectorAll("button")].forEach((b) => {
+    const active = b.dataset.tab === tab;
+    b.classList.toggle("active", active);
+    if (active) {
+      b.setAttribute("aria-current", "page");
+      b.scrollIntoView({ block: "nearest", inline: "nearest" });
+    } else b.removeAttribute("aria-current");
+  });
   window.scrollTo({ top: 0, behavior: "auto" });
   render();
 }
@@ -371,6 +380,7 @@ function render() {
   if (state.lesson) return renderLesson();
   if (state.tab === "explore") return renderExplore();
   if (state.tab === "library") return renderLibrary();
+  if (state.tab === "study") return renderStudy();
   if (state.tab === "rewards") return renderRewards();
   if (state.tab === "progress") return renderProgress();
   if (state.tab === "profile") return renderProfile();
@@ -1667,6 +1677,314 @@ async function renderLibrary(query) {
   });
 }
 
+/* --- private PDF study --- */
+
+async function renderStudy() {
+  const study = state.study ||= {
+    documents: [], selectedId: null, loaded: false, pending: "", error: "",
+    sources: null, dirty: false, quiz: null, scratch: [], snippet: null, count: 3,
+  };
+  if (!study.loaded && !study.pending) {
+    await studyAction(study, "Loading your PDFs and sources…", async () => {
+      [study.documents, study.sources] = await Promise.all([
+        api("/api/study/documents"), api("/api/study/sources"),
+      ]);
+      study.selectedId = study.documents[0]?.id ?? null;
+      study.loaded = true;
+    });
+  } else paintStudy(study);
+}
+
+async function studyAction(study, label, action) {
+  if (study.pending) return;
+  study.pending = label;
+  study.error = "";
+  paintStudy(study);
+  let focus;
+  try { focus = await action(); }
+  catch (err) { study.error = err.message; }
+  finally {
+    study.pending = "";
+    paintStudy(study);
+    if (state.study === study && state.tab === "study") {
+      document.getElementById(study.error ? "studyError" : focus)?.focus();
+    }
+  }
+}
+
+function studySourceIds(sources) {
+  const questions = sources.same_question_pdf ? sources.theory_document_id : sources.question_document_id;
+  const answers = sources.answer_pdf === "questions" ? questions
+    : sources.answer_pdf === "theory" ? sources.theory_document_id : sources.answer_document_id;
+  return { questions, answers };
+}
+
+function changeStudySources(study, patch, repaint = true) {
+  Object.assign(study.sources, patch);
+  study.dirty = true;
+  study.quiz = study.snippet = null;
+  study.scratch = [];
+  study.error = "";
+  if (repaint) paintStudy(study);
+  else {
+    document.getElementById("studyQuiz").innerHTML = "";
+    document.getElementById("studySnippet").innerHTML = "";
+    document.getElementById("studySaved").textContent = "Unsaved source changes.";
+  }
+}
+
+async function saveStudySources(study) {
+  study.sources = await api("/api/study/sources", { method: "PUT", body: study.sources });
+  study.dirty = false;
+}
+
+function paintStudy(study) {
+  if (state.study !== study || state.tab !== "study" || !state.user || state.lesson || state.shared) return;
+  const doc = study.documents.find((item) => item.id === study.selectedId);
+  const s = study.sources;
+  const disabled = study.pending ? "disabled" : "";
+  const pdfOptions = (selected) => `<option value="">Choose a PDF</option>` + study.documents.map((item) =>
+    `<option value="${item.id}" ${item.id === selected ? "selected" : ""}>${esc(item.filename)} · ${item.page_count} pages</option>`).join("");
+  view.innerHTML = `
+    <div class="card">
+      <span class="tag cat">Your lecture notes</span>
+      <h1 style="margin-top:12px">Study PDFs</h1>
+      <p class="small muted">Read random theory snippets and practise questions already printed in your PDFs.</p>
+      <p class="tiny muted">Your extracted notes stay private in your account. AI only extracts existing questions and printed answers;
+        it never writes questions, solves them, or grades your answers. Selected question and answer pages are sent to Anthropic.
+        Theory snippets use your notes directly.</p>
+      <form id="studyUpload" class="stack">
+        <fieldset class="study-fields" ${study.pending || !study.loaded ? "disabled" : ""}>
+          <label for="studyFile">Add a PDF to your library</label>
+          <input id="studyFile" type="file" accept="application/pdf,.pdf" required aria-describedby="studyUploadHelp">
+          <p id="studyUploadHelp" class="tiny muted">Upload theory notes, an exercise sheet, or an answer key, then choose it below.
+            Text PDFs only, up to 10 MiB and 300 pages each; 20 PDFs per account.
+            Scanned or handwritten notes need text recognition (OCR) first.</p>
+          <button class="btn small" type="submit">Upload PDF</button>
+        </fieldset>
+      </form>
+    </div>
+    ${study.pending ? `<div class="card small" role="status"><span class="spinner"></span> ${esc(study.pending)}</div>` : ""}
+    ${study.error ? `<div class="card study-error" id="studyError" role="alert" tabindex="-1">${esc(study.error)}
+      ${!study.loaded ? `<button id="studyRetry" class="btn small ghost">Retry loading PDFs</button>` : ""}</div>` : ""}
+    ${study.documents.length ? `<div class="card">
+      <fieldset class="study-fields" ${disabled}>
+        <label for="studyDocument">Manage uploaded PDFs</label>
+        <select id="studyDocument">${pdfOptions(study.selectedId)}</select>
+        ${doc ? `<div class="row wrap study-document-meta">
+          <span class="tiny muted">${doc.page_count} PDF pages</span>
+          <button class="btn small ghost" id="studyDelete" type="button">Delete PDF</button>
+        </div>
+        ${doc.blank_pages.length ? `<p class="tiny muted">No readable text on PDF pages ${esc(doc.blank_pages.join(", "))}.</p>` : ""}` : ""}
+      </fieldset>
+    </div>` : study.loaded ? `<div class="card"><p class="muted small">Upload your first PDF to choose your study sources.
+      You can use one PDF for everything or separate notes, questions, and answers.</p></div>` : ""}
+    ${study.loaded ? `<form id="studySourcesForm" class="card">
+      <h2>Your study sources</h2>
+      <p class="tiny muted" id="studyPageHelp">Use PDF page positions starting at 1, including covers, rather than printed page labels.
+        Enter ranges such as 1-4, 8, 12-15. Each source has its own page selection.</p>
+      <fieldset class="study-fields" ${disabled}>
+        <section aria-labelledby="studyTheoryTitle">
+          <h3 id="studyTheoryTitle">Theory from</h3>
+          <div class="field"><label for="studyTheoryDocument">Theory PDF</label>
+            <select id="studyTheoryDocument">${pdfOptions(s.theory_document_id)}</select></div>
+          <div class="field"><label for="studyTheoryPages">Theory pages</label>
+            <input id="studyTheoryPages" type="text" value="${esc(s.theory_pages)}" placeholder="1-4, 8"
+              maxlength="1000" aria-describedby="studyPageHelp"></div>
+          <button class="btn subtle wide" id="studySnippetButton" type="button">Give me a random theory snippet</button>
+        </section>
+        <hr class="study-divider">
+        <section aria-labelledby="studyQuestionsTitle">
+          <h3 id="studyQuestionsTitle">Questions from</h3>
+          <label class="check"><input id="studySameQuestionPdf" type="checkbox" ${s.same_question_pdf ? "checked" : ""}>
+            <span>Same PDF as theory</span></label>
+          ${!s.same_question_pdf ? `<div class="field"><label for="studyQuestionDocument">Questions PDF</label>
+            <select id="studyQuestionDocument">${pdfOptions(s.question_document_id)}</select></div>` : ""}
+          <div class="field"><label for="studyQuestionPages">Question pages</label>
+            <input id="studyQuestionPages" type="text" value="${esc(s.question_pages)}" placeholder="9-12"
+              maxlength="1000" aria-describedby="studyPageHelp studyQuestionHelp"></div>
+          <p id="studyQuestionHelp" class="tiny muted">Choose pages containing existing questions. Select up to 40 question pages
+            and 40 answer pages; dense notes may need a smaller selection.</p>
+        </section>
+        <hr class="study-divider">
+        <section aria-labelledby="studyAnswersTitle">
+          <h3 id="studyAnswersTitle">Answers from</h3>
+          <div class="field"><label for="studyAnswerSource">Answer PDF source</label>
+            <select id="studyAnswerSource">
+              <option value="questions" ${s.answer_pdf === "questions" ? "selected" : ""}>Same PDF as questions</option>
+              <option value="theory" ${s.answer_pdf === "theory" ? "selected" : ""}>Same PDF as theory</option>
+              <option value="separate" ${s.answer_pdf === "separate" ? "selected" : ""}>A different PDF</option>
+            </select></div>
+          ${s.answer_pdf === "separate" ? `<div class="field"><label for="studyAnswerDocument">Answers PDF</label>
+            <select id="studyAnswerDocument">${pdfOptions(s.answer_document_id)}</select></div>` : ""}
+          <div class="field"><label for="studyAnswerPages">Answer pages</label>
+            <input id="studyAnswerPages" type="text" value="${esc(s.answer_pages)}" placeholder="20-24"
+              maxlength="1000" aria-describedby="studyPageHelp studyAnswerHelp"></div>
+          <p class="tiny muted" id="studyAnswerHelp">Select the printed answers or solutions. If no matching answer is found,
+            Tangent tells you; it does not invent one.</p>
+        </section>
+        <hr class="study-divider">
+        <div class="field"><label for="studyCount">Extract up to this many questions</label>
+          <select id="studyCount">${[1, 2, 3, 4, 5].map((n) => `<option value="${n}" ${study.count === n ? "selected" : ""}>${n}</option>`).join("")}</select></div>
+        <button class="btn wide" id="studyExtractButton" type="button">Extract up to ${study.count} question${study.count === 1 ? "" : "s"}</button>
+        <p class="tiny muted">Only questions present in the selected pages are returned, so there may be fewer.
+          Each extraction uses one of your daily lesson generations.</p>
+        <button class="btn ghost small" id="studySave" type="submit">Save sources</button>
+        <p class="tiny muted" id="studySaved" role="status">${study.dirty ? "Unsaved source changes." : "Sources saved."}
+          Extraction and snippets also save these settings.</p>
+      </fieldset>
+    </form>` : ""}
+    <div id="studyQuiz"></div>
+    <div id="studySnippet">${study.snippet ? `<article class="card">
+      <h2 id="studySnippetHeading" tabindex="-1">From your theory notes</h2>
+      <p class="tiny muted">${esc(study.snippet.filename)} · PDF page ${study.snippet.page}</p>
+      <blockquote class="study-excerpt">${esc(study.snippet.text)}</blockquote>
+      <p class="tiny muted">A random excerpt copied from the PDF's extracted text.</p>
+    </article>` : ""}</div>`;
+
+  document.getElementById("studyUpload").onsubmit = (e) => {
+    e.preventDefault();
+    const file = document.getElementById("studyFile").files[0];
+    if (!file) return;
+    studyAction(study, "Reading your PDF…", async () => {
+      if (file.size > 10 * 1024 * 1024) throw new Error("Choose a PDF no larger than 10 MiB.");
+      const body = new FormData();
+      body.append("file", file);
+      const added = await api("/api/study/documents", { method: "POST", body });
+      study.documents.push(added);
+      study.selectedId = added.id;
+      if (!study.sources.theory_document_id) changeStudySources(study, { theory_document_id: added.id });
+      return "studyTheoryDocument";
+    });
+  };
+  const retry = document.getElementById("studyRetry");
+  if (retry) retry.onclick = renderStudy;
+  const select = document.getElementById("studyDocument");
+  if (select) select.onchange = () => {
+    study.selectedId = Number(select.value) || null;
+    paintStudy(study);
+    document.getElementById("studyDocument")?.focus();
+  };
+  if (doc) document.getElementById("studyDelete").onclick = () => {
+    if (!window.confirm(`Delete “${doc.filename}” from your account? Study sources using this PDF will need another PDF.`)) return;
+    studyAction(study, "Deleting PDF…", async () => {
+      await api(`/api/study/documents/${doc.id}`, { method: "DELETE" });
+      study.documents = study.documents.filter((item) => item.id !== doc.id);
+      study.selectedId = study.documents[0]?.id ?? null;
+      const patch = {};
+      const ids = studySourceIds(s);
+      const effective = { theory: s.theory_document_id, question: ids.questions, answer: ids.answers };
+      for (const source of ["theory", "question", "answer"]) {
+        if (s[`${source}_document_id`] === doc.id) {
+          patch[`${source}_document_id`] = null;
+        }
+        if (effective[source] === doc.id) patch[`${source}_pages`] = "";
+      }
+      changeStudySources(study, patch);
+      return study.documents.length ? "studyDocument" : "studyFile";
+    });
+  };
+  if (study.loaded) {
+    const bind = (id, key, kind) => {
+      const input = document.getElementById(id);
+      if (!input) return;
+      input[kind === "text" ? "oninput" : "onchange"] = (e) => {
+        const value = kind === "id" ? Number(e.target.value) || null
+          : kind === "check" ? e.target.checked : e.target.value;
+        changeStudySources(study, { [key]: value }, kind !== "text");
+        if (kind !== "text") document.getElementById(id)?.focus();
+      };
+    };
+    bind("studyTheoryDocument", "theory_document_id", "id");
+    bind("studyTheoryPages", "theory_pages", "text");
+    bind("studySameQuestionPdf", "same_question_pdf", "check");
+    bind("studyQuestionDocument", "question_document_id", "id");
+    bind("studyQuestionPages", "question_pages", "text");
+    bind("studyAnswerSource", "answer_pdf", "select");
+    bind("studyAnswerDocument", "answer_document_id", "id");
+    bind("studyAnswerPages", "answer_pages", "text");
+    document.getElementById("studyCount").onchange = (e) => {
+      study.count = Number(e.target.value);
+      document.getElementById("studyExtractButton").textContent = `Extract up to ${study.count} question${study.count === 1 ? "" : "s"}`;
+    };
+    document.getElementById("studySourcesForm").onsubmit = (e) => {
+      e.preventDefault();
+      studyAction(study, "Saving sources…", async () => {
+        await saveStudySources(study);
+        return "studySave";
+      });
+    };
+    document.getElementById("studyExtractButton").onclick = () => {
+      studyAction(study, "Extracting printed questions and answers…", async () => {
+        const ids = studySourceIds(study.sources);
+        if (!ids.questions || !s.question_pages.trim()) throw new Error("Choose a questions PDF and question pages.");
+        if (!ids.answers || !s.answer_pages.trim()) throw new Error("Choose an answers PDF and answer pages.");
+        await saveStudySources(study);
+        const userId = state.user?.id;
+        if (state.study !== study || !userId) return;
+        try {
+          study.quiz = await api(`/api/study/documents/${ids.questions}/questions`, {
+            method: "POST", body: {
+              pages: s.question_pages, answer_document_id: ids.answers,
+              answer_pages: s.answer_pages, count: study.count,
+            },
+          });
+          study.scratch = [];
+          return "studyQuizHeading";
+        } finally {
+          try {
+            const user = await api("/api/auth/me");
+            if (state.study === study && state.user?.id === userId) state.user = user;
+          } catch { /* Keep the extraction result or its original error. */ }
+        }
+      });
+    };
+    document.getElementById("studySnippetButton").onclick = () => {
+      studyAction(study, "Choosing a theory excerpt…", async () => {
+        if (!s.theory_document_id || !s.theory_pages.trim()) throw new Error("Choose a theory PDF and theory pages.");
+        await saveStudySources(study);
+        if (state.study !== study || !state.user) return;
+        study.snippet = await api(`/api/study/documents/${s.theory_document_id}/snippet`, {
+          method: "POST", body: { pages: s.theory_pages },
+        });
+        return "studySnippetHeading";
+      });
+    };
+  }
+  paintStudyQuiz(study);
+}
+
+function paintStudyQuiz(study) {
+  const slot = document.getElementById("studyQuiz");
+  if (!slot || !study.quiz) return;
+  const quiz = study.quiz;
+  slot.innerHTML = `<div class="card">
+    <h2 id="studyQuizHeading" tabindex="-1">Questions from your PDF</h2>
+    <p class="tiny muted">${esc(quiz.filename)} · PDF pages ${esc(quiz.pages.join(", "))}</p>
+    <p class="tiny muted">Found ${quiz.questions.length} question${quiz.questions.length === 1 ? "" : "s"}.
+      Only printed questions and matching printed answers are extracted. Your answers are not graded.</p>
+    ${!quiz.questions.length ? `<p>No questions found in the selected pages. Try pages containing exercises or exam questions.</p>` : ""}
+    ${quiz.questions.map((q, index) => `<section class="study-question" aria-labelledby="studyPrompt${index}">
+      <h3 id="studyPrompt${index}" class="study-prompt">${esc(q.prompt)}</h3>
+      <details class="study-source"><summary>Question source</summary>
+        ${q.question_excerpts.map((excerpt) => `<p class="tiny muted">${esc(quiz.filename)} · PDF page ${excerpt.page}</p>
+          <blockquote class="study-excerpt">${esc(excerpt.text)}</blockquote>`).join("")}
+      </details>
+      <label for="studyScratch${index}">Your answer (optional, for your own notes)</label>
+      <textarea id="studyScratch${index}" rows="3" data-study-scratch="${index}">${esc(study.scratch[index] || "")}</textarea>
+      <details class="study-source">
+        <summary>Show answer from PDF</summary>
+        ${q.answer ? `<p class="tiny muted">${esc(quiz.answer_filename)} · PDF pages ${esc([...new Set(q.answer_excerpts.map((excerpt) => excerpt.page))].join(", "))}</p>
+          <blockquote class="study-excerpt">${esc(q.answer)}</blockquote>`
+          : `<p>No matching answer found in the selected answer pages.</p>`}
+      </details>
+    </section>`).join("")}
+  </div>`;
+  slot.querySelectorAll("[data-study-scratch]").forEach((input) => {
+    input.oninput = () => { study.scratch[Number(input.dataset.studyScratch)] = input.value; };
+  });
+}
+
 /* --- sharing --- */
 
 async function shareLesson(lessonId, button, slot) {
@@ -2825,7 +3143,7 @@ function renderProfile() {
 
     <div class="card danger">
       <h2>Delete your account</h2>
-      <p class="muted small">Removes your profile, activity log, observations, lessons
+      <p class="muted small">Removes your profile, activity log, observations, PDFs, lessons
         and progress. This can't be undone. Lessons you contributed to the library stay,
         without your name on them.</p>
       <button class="btn ghost wide" id="deleteAccount" style="margin-top:12px">
@@ -2918,6 +3236,7 @@ function renderProfile() {
           body: { password: document.getElementById("delPass").value },
         });
         state.user = null;
+        state.study = null;
         state.digest = null;
         state.observations = [];
         state.growth = null;

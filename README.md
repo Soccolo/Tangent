@@ -45,6 +45,55 @@ spending anything. The account's password is `demodemo` if it didn't already exi
 Tangent's own pick is left ungenerated on purpose: opening it is what exercises the
 real Claude path once a key is in place.
 
+## Study your own PDFs
+
+Open **Study**, upload your PDFs, and configure three independent sources:
+
+- **Theory from**: choose a PDF and page ranges for random verbatim theory excerpts.
+  This makes no model call and works without an API key.
+- **Questions from**: use the theory PDF or choose another PDF, then specify pages
+  containing existing questions. AI extracts up to the requested number; it does
+  not write new questions, invent options, or turn theory into a quiz. Original
+  question numbering and any printed answer choices remain in the extracted text.
+- **Answers from**: use the question PDF, theory PDF, or another PDF, and specify
+  answer-key/solution pages. Reveal the supplied answer after trying a question.
+  If no matching answer is found, Tangent says so; it does not solve the question.
+
+Enter physical PDF page positions (starting at 1, including the cover), for
+example `1-4, 8, 12-15`. Shared PDFs still have separate page ranges for each role.
+**Save sources** remembers the setup across visits; extraction and snippets also
+save it. Question and answer citations show their own PDF filenames and pages.
+Questions may be open-ended or multiple choice; scratch responses are not graded.
+
+Only the selected question and answer text is sent to Anthropic for extraction.
+Every returned excerpt is checked against its cited page, allowing whitespace
+differences but rejecting invented text. Matching the right supplied answer to a
+question still relies on AI, so verify citations against your notes. Each
+extraction consumes one existing daily lesson generation, including failed calls.
+Practice is temporary and does not award XP or coins.
+
+Extracted text stays private to the account in the database; original PDF files
+are not retained, and PDF content never enters the shared lesson library. Deleting
+a PDF removes its text and clears source selections pointing to it. Account export
+and deletion include documents and saved sources.
+
+Limits: 20 PDFs per account, 10 MiB and 300 pages per PDF, one million extracted
+characters per document, 40 pages per question/answer source, and 60,000 text
+characters across both sources per extraction. Empty pages
+retain their positions and are identified in the UI. Scans and handwriting need
+OCR before uploading; image-only diagrams are not interpreted. Text extraction
+can lose mathematical notation or table layout, so check answers against the
+original notes. Existing databases receive the new table and nullable source-setting
+column at startup without a reset.
+
+Run the checks without an API key (model calls are mocked):
+
+```bash
+pip install httpx
+python -m unittest discover -s tests -v
+node tests/test_study_ui.cjs
+```
+
 ## Tangent, the owl
 
 The owl is a character, not a logo. `web/owl.js` rebuilds it as inline SVG with its

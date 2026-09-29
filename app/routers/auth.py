@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session as OrmSession
 
 from .. import mail, ratelimit
@@ -37,6 +37,7 @@ from ..models import (
     ReviewProgress,
     RewardClaim,
     Session,
+    StudyDocument,
     User,
 )
 from ..schemas import (
@@ -381,6 +382,21 @@ def export_data(user: User = Depends(current_user), db: OrmSession = Depends(get
             }
             for o in db.scalars(select(Observation).where(Observation.user_id == user.id))
         ],
+        "study_sources": json.loads(user.study_sources_json) if user.study_sources_json else None,
+        "study_documents": [
+            {
+                "id": document.id,
+                "filename": document.filename,
+                "page_count": document.page_count,
+                "pages": json.loads(document.pages_json),
+                "question_pages": document.question_pages,
+                "snippet_pages": document.snippet_pages,
+                "created_at": document.created_at.isoformat(),
+            }
+            for document in db.scalars(
+                select(StudyDocument).where(StudyDocument.user_id == user.id)
+            )
+        ],
         "digests": [
             {
                 "day": d.day.isoformat(),
@@ -534,6 +550,14 @@ def delete_account(
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "That password isn't right.")
 
     user_id = user.id
+    # Serialize cleanup with PDF uploads on both SQLite and Postgres.
+    locked = db.execute(
+        update(User)
+        .where(User.id == user_id, User.created_at == user.created_at)
+        .values(id=User.id)
+    )
+    if not locked.rowcount:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Session expired")
 
     # Library contributions stay because other people's lessons point at them.
     # Collect their ids before unlinking the author so every surviving derived
@@ -628,7 +652,7 @@ def delete_account(
     db.execute(delete(BossAttempt).where(BossAttempt.user_id == user_id))
     db.execute(delete(CosmeticUnlock).where(CosmeticUnlock.user_id == user_id))
     db.execute(delete(HintUse).where(HintUse.user_id == user_id))
-    for model in (Observation, Generation, Activity, Lesson, Digest, PasswordReset, Session):
+    for model in (StudyDocument, Observation, Generation, Activity, Lesson, Digest, PasswordReset, Session):
         db.execute(delete(model).where(model.user_id == user_id))
     db.execute(delete(User).where(User.id == user_id))
     db.commit()

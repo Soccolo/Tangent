@@ -8,11 +8,12 @@ from fastapi.staticfiles import StaticFiles
 
 from .config import WEB_DIR
 from .db import Base, engine, ensure_schema
-from .routers import auth, capture, growth, learn, library, rewards
+from .routers import auth, capture, growth, learn, library, rewards, study
 
 logging.basicConfig(level=logging.INFO)
 
 app = FastAPI(title="Tangent", description="Learn the ring around your job.")
+app.add_middleware(study.StudyUploadLimit)
 
 Base.metadata.create_all(engine)
 ensure_schema()  # additive column migration for already-deployed databases
@@ -23,6 +24,8 @@ app.include_router(capture.router)
 app.include_router(library.router)
 app.include_router(rewards.router)
 app.include_router(growth.router)
+app.include_router(study.router)
+app.include_router(study.sources_router)
 
 app.mount("/static", StaticFiles(directory=WEB_DIR), name="static")
 

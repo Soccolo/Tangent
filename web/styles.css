@@ -356,7 +356,7 @@ label { display: block; font-size: 12px; font-weight: 500; margin: 0 0 5px; colo
 
 nav.tabs {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 30;
-  display: flex; justify-content: center;
+  display: flex; justify-content: flex-start; overflow-x: auto;
   padding: 0 12px calc(12px + env(safe-area-inset-bottom));
   background: none; border: 0;
 }
@@ -366,7 +366,7 @@ nav.tabs::before {
   pointer-events: none;
 }
 nav.tabs button {
-  flex: 1; max-width: 160px;
+  flex: 1; min-width: 60px; max-width: 160px;
   border: 0; background: transparent; color: rgba(233, 233, 237, .52);
   padding: 11px 8px; border-radius: 11px; cursor: pointer;
   font-weight: 600; font-size: 13px;
@@ -392,6 +392,31 @@ nav.tabs button.active { color: var(--brand); background: rgba(145, 132, 217, .1
   }
   nav.tabs::before { content: none; }
 }
+
+/* ----------------------------------------------------------- PDF study -- */
+
+.study-fields { padding: 0; margin: 0; border: 0; min-width: 0; }
+.study-fields select, .study-fields input[type=file] {
+  width: 100%; max-width: 100%; padding: 10px;
+  background: var(--surface-2); color: var(--text);
+  border: 1px solid var(--border-soft); border-radius: var(--radius-sm);
+}
+.study-fields input[type=file] { font-size: 13px; }
+.study-document-meta { justify-content: space-between; margin-top: 12px; }
+.study-divider { border: 0; border-top: 1px solid var(--border); margin: 22px 0; }
+.study-error { color: var(--bad); }
+.study-error button { display: block; margin-top: 12px; }
+.study-question + .study-question { margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--border); }
+.study-question h3 { font-size: 17px; }
+.study-prompt { white-space: pre-wrap; overflow-wrap: anywhere; }
+.study-source { margin: 14px 0; }
+.study-source summary { cursor: pointer; color: var(--brand-bright); font-size: 14px; }
+.study-fields .check { margin-bottom: 14px; }
+.study-excerpt {
+  margin: 16px 0; padding-left: 16px; border-left: 3px solid var(--brand);
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+:root[data-theme="light"] .study-error { color: #8c2340; }
 
 /* ----------------------------------------------------------------- misc -- */
 

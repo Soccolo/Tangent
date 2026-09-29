@@ -51,6 +51,8 @@ class User(Base):
     timezone: Mapped[str | None] = mapped_column(String(64), nullable=True)
     # Default self-rated knowledge, 1-10, used to pre-set the per-lesson slider.
     default_level: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Independent theory, question and answer PDF sources; NULL on older accounts.
+    study_sources_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     xp: Mapped[int] = mapped_column(Integer, default=0)
@@ -74,6 +76,21 @@ class User(Base):
 
     activities: Mapped[list["Activity"]] = relationship(back_populates="user")
     lessons: Mapped[list["Lesson"]] = relationship(back_populates="user")
+
+
+class StudyDocument(Base):
+    """Private extracted PDF pages; page positions include empty pages."""
+
+    __tablename__ = "study_documents"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    filename: Mapped[str] = mapped_column(String(255))
+    page_count: Mapped[int] = mapped_column(Integer)
+    pages_json: Mapped[str] = mapped_column(Text)
+    question_pages: Mapped[str] = mapped_column(String(1000), default="")
+    snippet_pages: Mapped[str] = mapped_column(String(1000), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
 class Session(Base):
